@@ -1,0 +1,68 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+rdtsc64.asm						     Page 1 - 1
+
+
+				;          RDTSC64.ASM                                          Agner Fog 2007
+
+				; © 2003-2007 GNU General Public License www.gnu.org/licenses/gpl.html
+
+ 00000000			.code
+
+				; ********** ReadTSC function **********
+				; C++ prototype:
+				; extern "C" __int64 ReadTSC (void);
+
+				; This function returns the value of the time stamp counter, which counts 
+				; clock cycles. To count how many clock cycles a piece of code takes, call
+				; Rdtsc before and after the code to measure and calculate the difference.
+
+				; The number of clock cycles taken by the ReadTSC function itself is approximately:
+				; Core 2:   730
+				; Pentium 4:  700
+				; Pentium II and Pentium III: 225
+				; AMD Athlon 64, Opteron: 126
+				; Does not work on 80386 and 80486.
+
+				; Note that clock counts may not be fully reproducible on Intel Core and
+				; Core 2 processors because the clock frequency can change. More reliable
+				; instruction timings are obtained with the performance monitor counter
+				; for "core clock cycles". This requires a kernel mode driver as the one
+				; included with www.agner.org/optimize/testp.zip.
+
+ 00000000			ReadTSC PROC
+ 00000000  53			        push    rbx                    ; ebx is modified by cpuid
+ 00000001  2B C0		        sub     eax, eax               ; 0
+ 00000003  0F A2		        cpuid                          ; serialize
+ 00000005  0F 31		        rdtsc                          ; read time stamp counter into edx:eax
+ 00000007  48/ C1 E2 20		        shl     rdx, 32
+ 0000000B  48/ 0B C2		        or      rax, rdx               ; combine into 64 bit register        
+ 0000000E  50			        push    rax
+ 0000000F  2B C0		        sub     eax, eax
+ 00000011  0F A2		        cpuid                          ; serialize
+ 00000013  58			        pop     rax                    ; return value
+ 00000014  5B			        pop     rbx
+ 00000015  C3			        ret
+ 00000016			ReadTSC ENDP
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+rdtsc64.asm						     Symbols 2 - 1
+
+
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+ReadTSC  . . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 00000016 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

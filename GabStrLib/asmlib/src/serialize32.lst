@@ -1,0 +1,75 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+serialize32.asm						     Page 1 - 1
+
+
+				;                   serialize32.asm                      © Agner Fog 2007-06-15
+				;
+				;
+				; Serialize
+				; =============
+				; This function serializes execution.
+				; Use this before and after calls to __readpmc() to prevent out-of-order execution.
+				; 
+				; © 2007 GNU General Public License www.gnu.org/licenses/gpl.html
+				;
+				;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+				.686
+				.model flat
+
+ 00000000			.code
+
+				; ********** Serialize function **********
+				; C++ prototype:
+				; extern "C" void Serialize();
+
+
+ 00000000			_Serialize PROC NEAR
+				PUBLIC _Serialize
+
+ 00000000  53			        push    ebx                    ; ebx is modified by cpuid
+ 00000001  2B C0		        sub     eax, eax
+ 00000003  0F A2		        cpuid                          ; cpuid function 0
+ 00000005  5B			        pop     ebx
+ 00000006  C3			        ret
+ 00000007			_Serialize ENDP
+				        
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+serialize32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000000 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 00000007 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_Serialize . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 00000007 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+
+	   0 Warnings
+	   0 Errors

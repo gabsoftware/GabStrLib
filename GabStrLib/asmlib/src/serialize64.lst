@@ -1,0 +1,53 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+serialize64.asm						     Page 1 - 1
+
+
+				;                   serialize64.asm                      © Agner Fog 2007-06-15
+				;
+				;
+				; Serialize
+				; =============
+				; This function serializes execution.
+				; Use this before and after calls to __readpmc() to prevent out-of-order execution.
+				; 
+				; © 2007 GNU General Public License www.gnu.org/licenses/gpl.html
+				;
+				;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ 00000000			.code
+
+				; ********** Serialize function **********
+				; C++ prototype:
+				; extern "C" void Serialize();
+
+
+ 00000000			Serialize PROC
+ 00000000  53			        push    rbx                    ; ebx is modified by cpuid
+ 00000001  2B C0		        sub     eax, eax
+ 00000003  0F A2		        cpuid                          ; cpuid function 0
+ 00000005  5B			        pop     rbx
+ 00000006  C3			        ret
+ 00000007			Serialize ENDP
+				        
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+serialize64.asm						     Symbols 2 - 1
+
+
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+Serialize  . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 00000007 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

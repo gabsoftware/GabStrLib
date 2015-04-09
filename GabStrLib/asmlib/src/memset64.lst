@@ -1,0 +1,255 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+memset64.asm						     Page 1 - 1
+
+
+				;*************************  memset64.asm  *************************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard memset function:
+				; void * A_memset(void * dest, int c, size_t count);
+				; Sets 'count' bytes from 'dest' to the 8-bit value 'c'
+				;
+				; Overriding standard function memset:
+				; The alias ?OVR_memset is changed to _memset in the object file if
+				; it is desired to override the standard library function memset.
+				;
+				; Optimization:
+				; Uses XMM registers to set 16 bytes at a time, aligned.
+				;
+				; The latest version of this file is available at:
+				; www.agner.org/optimize/asmexamples.zip
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+
+				public A_memset                        ; Function memset
+				public ?OVR_memset                     ; ?OVR removed if standard function memset overridden
+
+				; Imported from memcpy32.asm:
+				extern CacheBypassLimit: qword         ; Bypass cache if count > CacheBypassLimit
+
+ 00000000			.code
+
+				; extern "C" void * memset(void * dest, int c, size_t count);
+				; Function entry:
+ 00000000			A_memset PROC
+ 00000000			?OVR_memset LABEL NEAR
+
+				IFDEF   WINDOWS
+				ELSE    ; Unix
+ = rdi				Rdest   equ     <rdi>                  ; dest
+ 00000000  40/ 0F B6 C6		        movzx   eax, sil               ; c
+ = rdx				Rcount  equ     <rdx>                  ; count
+ = rcx				Rdest2  equ     <rcx>                  ; copy of dest
+ = rsi				Rcount2 equ     <rsi>                  ; copy of count
+ 00000004  48/ 8B F2		        mov     Rcount2, Rcount        ; copy count
+				ENDIF
+
+ 00000007  69 C0 01010101	        imul    eax, 01010101H         ; Broadcast c into all bytes of eax
+				        ; (multiplication is slow on Pentium 4, but faster on later processors)
+ 0000000D  48/ 8B CF		        mov     Rdest2, Rdest          ; save dest
+ 00000010  48/ 83 FA 10		        cmp     Rcount, 16
+ 00000014  77 4C		        ja      M100
+				        
+ 00000016  4C/ 8D 15		        lea     r10, MemsetJTab
+	   00000000 R
+ 0000001D  41/ FF 24 D2		        jmp     qword ptr [r10+Rcount*8]
+				        
+				; Separate code for each count from 0 to 16:
+ 00000021  89 47 0C		M16:    mov     [Rdest+12], eax
+ 00000024  89 47 08		M12:    mov     [Rdest+8],  eax
+ 00000027  89 47 04		M08:    mov     [Rdest+4],  eax
+ 0000002A  89 07		M04:    mov     [Rdest],    eax
+ 0000002C  48/ 8B C1		M00:    mov     rax, Rdest2            ; return dest
+ 0000002F  C3			        ret
+
+ 00000030  89 47 0B		M15:    mov     [Rdest+11], eax
+ 00000033  89 47 07		M11:    mov     [Rdest+7],  eax
+ 00000036  89 47 03		M07:    mov     [Rdest+3],  eax
+ 00000039  66| 89 47 01		M03:    mov     [Rdest+1],  ax
+ 0000003D  88 07		M01:    mov     [Rdest],    al
+ 0000003F  48/ 8B C1		        mov     rax, Rdest2            ; return dest
+ 00000042  C3			        ret
+				       
+ 00000043  89 47 0A		M14:    mov     [Rdest+10], eax
+ 00000046  89 47 06		M10:    mov     [Rdest+6],  eax
+ 00000049  89 47 02		M06:    mov     [Rdest+2],  eax
+ 0000004C  66| 89 07		M02:    mov     [Rdest],    ax
+ 0000004F  48/ 8B C1		        mov     rax, Rdest2            ; return dest
+ 00000052  C3			        ret
+
+ 00000053  89 47 09		M13:    mov     [Rdest+9],  eax
+ 00000056  89 47 05		M09:    mov     [Rdest+5],  eax
+ 00000059  89 47 01		M05:    mov     [Rdest+1],  eax
+ 0000005C  88 07		        mov     [Rdest],    al
+ 0000005E  48/ 8B C1		        mov     rax, Rdest2            ; return dest
+ 00000061  C3			        ret
+				        
+
+ 00000062			M100:   ; count > 16. Use SSE2 instruction set
+ 00000062  66| 0F 6E C0		        movd    xmm0, eax
+ 00000066  66| 0F 70 C0		        pshufd  xmm0, xmm0, 0          ; Broadcast c into all bytes of xmm0
+	   00
+				        
+				        ; Store the first unaligned part.
+				        ; The size of this part is 1 - 16 bytes.
+				        ; It is faster to always write 16 bytes, possibly overlapping
+				        ; with the subsequent regular part, than to make possibly mispredicted
+				        ; branches depending on the size of the first part.
+ 0000006B  66| 0F D6 07		        movq    qword ptr [Rdest],   xmm0
+ 0000006F  66| 0F D6 47		        movq    qword ptr [Rdest+8], xmm0
+	   08
+				        
+				        ; Check if count very big
+ 00000074  48/ 3B 15		        cmp     Rcount, [CacheBypassLimit]
+	   00000000 E
+ 0000007B  77 31		        ja      M500                   ; Use non-temporal store if count > $NonTempMoveLimit
+				        
+				        ; Point to end of regular part:
+				        ; Round down dest+count to nearest preceding 16-bytes boundary
+ 0000007D  48/ 8D 54 3A		        lea     Rcount, [Rdest+Rcount-1]
+	   FF
+ 00000082  48/ 83 E2 F0		        and     Rcount, -10H
+				        
+				        ; Point to start of regular part:
+				        ; Round up dest to next 16-bytes boundary
+ 00000086  48/ 83 C7 10		        add     Rdest, 10H
+ 0000008A  48/ 83 E7 F0		        and     Rdest, -10H
+				        
+				        ; -(size of regular part)
+ 0000008E  48/ 2B FA		        sub     Rdest, Rcount
+ 00000091  7D 0B		        jnl     M300                   ; Jump if not negative
+				        
+ 00000093			M200:   ; Loop through regular part
+				        ; Rcount = end of regular part
+				        ; Rdest = negative index from the end, counting up to zero
+ 00000093  66| 0F 7F 04 17	        movdqa  [Rcount+Rdest], xmm0
+ 00000098  48/ 83 C7 10		        add     Rdest, 10H
+ 0000009C  75 F5		        jnz     M200
+				        
+ 0000009E			M300:   ; Do the last irregular part
+				        ; The size of this part is 1 - 16 bytes.
+				        ; It is faster to always write 16 bytes, possibly overlapping
+				        ; with the preceding regular part, than to make possibly mispredicted
+				        ; branches depending on the size of the last part.
+ 0000009E  48/ 8B C1		        mov     rax, Rdest2                          ; dest
+ 000000A1  66| 0F D6 44 06	        movq    qword ptr [rax+Rcount2-10H], xmm0
+	   F0
+ 000000A7  66| 0F D6 44 06	        movq    qword ptr [rax+Rcount2-8], xmm0
+	   F8
+ 000000AD  C3			        ret
+				   
+ 000000AE			M500:   ; Use non-temporal moves, same code as above:
+				        ; End of regular part:
+				        ; Round down dest+count to nearest preceding 16-bytes boundary
+ 000000AE  48/ 8D 54 3A		        lea     Rcount, [Rdest+Rcount-1]
+	   FF
+ 000000B3  48/ 83 E2 F0		        and     Rcount, -10H
+				        
+				        ; Start of regular part:
+				        ; Round up dest to next 16-bytes boundary
+ 000000B7  48/ 83 C7 10		        add     Rdest, 10H
+ 000000BB  48/ 83 E7 F0		        and     Rdest, -10H
+				        
+				        ; -(size of regular part)
+ 000000BF  48/ 2B FA		        sub     Rdest, Rcount
+ 000000C2  7D 0B		        jnl     M700                   ; Jump if not negative
+				        
+ 000000C4			M600:   ; Loop through regular part
+				        ; Rcount = end of regular part
+				        ; Rdest = negative index from the end, counting up to zero
+ 000000C4  F3/ 0F 7F 04 17	        movdqu  [Rcount+Rdest], xmm0
+ 000000C9  48/ 83 C7 10		        add     Rdest, 10H
+ 000000CD  75 F5		        jnz     M600
+				        
+ 000000CF			M700:   ; Do the last irregular part
+				        ; The size of this part is 1 - 16 bytes.
+				        ; It is faster to always write 16 bytes, possibly overlapping
+				        ; with the preceding regular part, than to make possibly mispredicted
+				        ; branches depending on the size of the last part.
+ 000000CF  48/ 8B C1		        mov     rax, Rdest2            ; dest
+ 000000D2  66| 0F D6 44 06	        movq    qword ptr [rax+Rcount2-10H], xmm0
+	   F0
+ 000000D8  66| 0F D6 44 06	        movq    qword ptr [rax+Rcount2-8], xmm0
+	   F8
+ 000000DE  C3			        ret
+				        
+				   
+ 00000000			.data
+				; Jump table for count from 0 to 16:
+ 00000000			MemsetJTab DQ M00, M01, M02, M03, M04, M05, M06, M07
+	   000000000000002C R
+	   000000000000003D R
+	   000000000000004C R
+	   0000000000000039 R
+	   000000000000002A R
+	   0000000000000059 R
+	   0000000000000049 R
+	   0000000000000036 R
+ 00000040  0000000000000027 R	           DQ M08, M09, M10, M11, M12, M13, M14, M15, M16
+	   0000000000000056 R
+	   0000000000000046 R
+	   0000000000000033 R
+	   0000000000000024 R
+	   0000000000000053 R
+	   0000000000000043 R
+	   0000000000000030 R
+	   0000000000000021 R
+
+ 000000DF			.code
+
+ 000000DF			A_memset endp
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+memset64.asm						     Symbols 2 - 1
+
+
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+A_memset . . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 000000DF Public
+  M16  . . . . . . . . . . . . .	L 	 00000021 _TEXT	
+  M12  . . . . . . . . . . . . .	L 	 00000024 _TEXT	
+  M08  . . . . . . . . . . . . .	L 	 00000027 _TEXT	
+  M04  . . . . . . . . . . . . .	L 	 0000002A _TEXT	
+  M00  . . . . . . . . . . . . .	L 	 0000002C _TEXT	
+  M15  . . . . . . . . . . . . .	L 	 00000030 _TEXT	
+  M11  . . . . . . . . . . . . .	L 	 00000033 _TEXT	
+  M07  . . . . . . . . . . . . .	L 	 00000036 _TEXT	
+  M03  . . . . . . . . . . . . .	L 	 00000039 _TEXT	
+  M01  . . . . . . . . . . . . .	L 	 0000003D _TEXT	
+  M14  . . . . . . . . . . . . .	L 	 00000043 _TEXT	
+  M10  . . . . . . . . . . . . .	L 	 00000046 _TEXT	
+  M06  . . . . . . . . . . . . .	L 	 00000049 _TEXT	
+  M02  . . . . . . . . . . . . .	L 	 0000004C _TEXT	
+  M13  . . . . . . . . . . . . .	L 	 00000053 _TEXT	
+  M09  . . . . . . . . . . . . .	L 	 00000056 _TEXT	
+  M05  . . . . . . . . . . . . .	L 	 00000059 _TEXT	
+  M100 . . . . . . . . . . . . .	L 	 00000062 _TEXT	
+  M200 . . . . . . . . . . . . .	L 	 00000093 _TEXT	
+  M300 . . . . . . . . . . . . .	L 	 0000009E _TEXT	
+  M500 . . . . . . . . . . . . .	L 	 000000AE _TEXT	
+  M600 . . . . . . . . . . . . .	L 	 000000C4 _TEXT	
+  M700 . . . . . . . . . . . . .	L 	 000000CF _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_memset  . . . . . . . . . .	L 	 00000000 _TEXT	Public
+CacheBypassLimit . . . . . . . .	QWord	 00000000 External
+MemsetJTab . . . . . . . . . . .	QWord	 00000000 _DATA	
+Rcount2  . . . . . . . . . . . .	Text   	 rsi
+Rcount . . . . . . . . . . . . .	Text   	 rdx
+Rdest2 . . . . . . . . . . . . .	Text   	 rcx
+Rdest  . . . . . . . . . . . . .	Text   	 rdi
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

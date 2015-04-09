@@ -1,0 +1,103 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+strcpy32.asm						     Page 1 - 1
+
+
+				;*************************  strcpy32.asm  ************************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard strcpy function:
+				; char * A_strcpy(char * dest, const char * src);
+				; Copies zero-terminated string from src to dest, including terminating zero.
+				;
+				; Overriding standard function memcpy:
+				; The alias ?OVR_strcpy is changed to _strcpy in the object file if
+				; it is desired to override the standard library function strcpy.
+				;
+				; Optimization:
+				; Uses optimized functions A_strlen and A_memcpy.
+				;
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+				.686
+				.xmm
+				.model flat
+
+				public _A_strcpy                       ; Function _A_strcpy
+				public ?OVR_strcpy                     ; ?OVR removed if standard function memcpy overridden
+
+				; Imported from strlen32.asm
+				extern _A_strlen:near
+
+				; Imported from memcpy32.asm
+				extern _A_memcpy:near
+
+
+ 00000000			.code
+
+				; extern "C" char * A_strcpy(char * dest, const char * src) {
+				;    return memcpy(dest, src, strlen(src)+1);
+				; }
+
+				; Function entry:
+ 00000000			_A_strcpy PROC    NEAR
+ 00000000			?OVR_strcpy LABEL NEAR
+
+ 00000000  8B 44 24 08		        mov     eax, [esp+8]           ; src
+ 00000004  50			        push    eax
+ 00000005  E8 00000000 E	        call    _A_strlen              ; length of src
+ 0000000A  59			        pop     ecx                    ; ecx = src. Assume unchanged by _A_strlen
+ 0000000B  40			        inc     eax                    ; include terminating zero in length
+ 0000000C  8B 54 24 04		        mov     edx, [esp+4]           ; dest
+ 00000010  50			        push    eax                    ; length+1
+ 00000011  51			        push    ecx                    ; src
+ 00000012  52			        push    edx                    ; dest
+ 00000013  E8 00000000 E	        call    _A_memcpy              ; copy
+ 00000018  83 C4 0C		        add     esp, 12                ; clean up stack
+ 0000001B  C3			        ret
+
+ 0000001C			_A_strcpy ENDP
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+strcpy32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000000 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 0000001C Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_A_strcpy  . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 0000001C Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_strcpy  . . . . . . . . . .	L Near	 00000000 _TEXT	Public
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+_A_memcpy  . . . . . . . . . . .	L Near	 00000000 FLAT	External
+_A_strlen  . . . . . . . . . . .	L Near	 00000000 FLAT	External
+
+	   0 Warnings
+	   0 Errors

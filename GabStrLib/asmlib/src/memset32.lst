@@ -1,0 +1,361 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+memset32.asm						     Page 1 - 1
+
+
+				;*************************  memset32.asm  *************************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard memset function:
+				; void * A_memset(void * dest, int c, size_t count);
+				; Sets 'count' bytes from 'dest' to the 8-bit value 'c'
+				;
+				; Overriding standard function memset:
+				; The alias ?OVR_memset is changed to _memset in the object file if
+				; it is desired to override the standard library function memset.
+				;
+				; Position-independent code is generated if POSITIONINDEPENDENT is defined.
+				;
+				; Optimization:
+				; Uses XMM registers to set 16 bytes at a time, aligned.
+				;
+				; The latest version of this file is available at:
+				; www.agner.org/optimize/asmexamples.zip
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+				.686
+				.xmm
+				.model flat
+
+				public _A_memset                       ; Function memset
+				public ?OVR_memset                     ; ?OVR removed if standard function memset overridden
+
+				; Imported from memcpy32.asm:
+				extern _CacheBypassLimit: dword        ; Bypass cache if count > _CacheBypassLimit
+
+				; Imported from instrset32.asm
+				extern _InstructionSet: near           ; Instruction set for CPU dispatcher
+
+
+				IFDEF   POSITIONINDEPENDENT
+				ENDIF
+
+
+ 00000000			.code
+
+				; extern "C" void * memset(void * dest, int c, size_t count);
+				; Function entry:
+ 00000000			_A_memset PROC    NEAR
+ 00000000			?OVR_memset LABEL NEAR
+ 00000000  8B 54 24 04		        mov     edx, [esp+4]           ; dest
+ 00000004  0F B6 44 24 08	        movzx   eax, byte ptr [esp+8]  ; c
+ 00000009  8B 4C 24 0C		        mov     ecx, [esp+12]          ; count
+ 0000000D  69 C0 01010101	        imul    eax, 01010101H         ; Broadcast c into all bytes of eax
+				        ; (multiplication is slow on Pentium 4, but faster on later processors)
+ 00000013  83 F9 10		        cmp     ecx, 16
+ 00000016  77 58		        ja      M100
+				        
+				        ; count <= 16
+				        
+				IFNDEF  POSITIONINDEPENDENT
+
+ 00000018  FF 24 8D		        jmp     MemsetJTab[ecx*4]
+	   00000000 R
+				        
+				; Separate code for each count from 0 to 16:
+ 0000001F  89 42 0C		M16:    mov     [edx+12], eax
+ 00000022  89 42 08		M12:    mov     [edx+8],  eax
+ 00000025  89 42 04		M08:    mov     [edx+4],  eax
+ 00000028  89 02		M04:    mov     [edx],    eax
+ 0000002A  8B 44 24 04		M00:    mov     eax, [esp+4]           ; dest
+ 0000002E  C3			        ret
+
+ 0000002F  89 42 0B		M15:    mov     [edx+11], eax
+ 00000032  89 42 07		M11:    mov     [edx+7],  eax
+ 00000035  89 42 03		M07:    mov     [edx+3],  eax
+ 00000038  66| 89 42 01		M03:    mov     [edx+1],  ax
+ 0000003C  88 02		M01:    mov     [edx],    al
+ 0000003E  8B 44 24 04		        mov     eax, [esp+4]           ; dest
+ 00000042  C3			        ret
+				       
+ 00000043  89 42 0A		M14:    mov     [edx+10], eax
+ 00000046  89 42 06		M10:    mov     [edx+6],  eax
+ 00000049  89 42 02		M06:    mov     [edx+2],  eax
+ 0000004C  66| 89 02		M02:    mov     [edx],    ax
+ 0000004F  8B 44 24 04		        mov     eax, [esp+4]           ; dest
+ 00000053  C3			        ret
+
+ 00000054  89 42 09		M13:    mov     [edx+9],  eax
+ 00000057  89 42 05		M09:    mov     [edx+5],  eax
+ 0000005A  89 42 01		M05:    mov     [edx+1],  eax
+ 0000005D  88 02		        mov     [edx],    al
+ 0000005F  8B 44 24 04		        mov     eax, [esp+4]           ; dest
+ 00000063  C3			        ret
+				        
+				ELSE    ; position-independent code. Too complicated to use jump table
+				ENDIF
+				        
+				align   16
+ 00000070			M100:   ; count > 16. 
+				IFNDEF  POSITIONINDEPENDENT
+ 00000070  FF 25 00000044 R	        jmp     [memsetDispatch]       ; Go to appropriate version, depending on instruction set
+
+				ELSE    ; Position-independent code
+				ENDIF
+
+ 00000076			memsetSSE2:  ; SSE2 version. Use xmm register
+ 00000076  66| 0F 6E C0		        movd    xmm0, eax
+ 0000007A  66| 0F 70 C0		        pshufd  xmm0, xmm0, 0          ; Broadcast c into all bytes of xmm0
+	   00
+				        
+				        ; Store the first unaligned part.
+				        ; The size of this part is 1 - 16 bytes.
+				        ; It is faster to always write 16 bytes, possibly overlapping
+				        ; with the subsequent regular part, than to make possibly mispredicted
+				        ; branches depending on the size of the first part.
+ 0000007F  66| 0F D6 02		        movq    qword ptr [edx],   xmm0
+ 00000083  66| 0F D6 42		        movq    qword ptr [edx+8], xmm0
+	   08
+				        
+				        ; Check if count very big
+				IFNDEF  POSITIONINDEPENDENT
+
+ 00000088  3B 0D 00000000 E	        cmp     ecx, [_CacheBypassLimit]
+				        
+				ELSE    ; position-independent code
+				ENDIF
+
+ 0000008E  77 30		        ja      M500                   ; Use non-temporal store if count > $NonTempMoveLimit
+				        
+				        ; Point to end of regular part:
+				        ; Round down dest+count to nearest preceding 16-bytes boundary
+ 00000090  8D 4C 11 FF		        lea     ecx, [edx+ecx-1]
+ 00000094  83 E1 F0		        and     ecx, -10H
+				        
+				        ; Point to start of regular part:
+				        ; Round up dest to next 16-bytes boundary
+ 00000097  83 C2 10		        add     edx, 10H
+ 0000009A  83 E2 F0		        and     edx, -10H
+				        
+				        ; -(size of regular part)
+ 0000009D  2B D1		        sub     edx, ecx
+ 0000009F  7D 0A		        jnl     M300                   ; Jump if not negative
+				        
+ 000000A1			M200:   ; Loop through regular part
+				        ; ecx = end of regular part
+				        ; edx = negative index from the end, counting up to zero
+ 000000A1  66| 0F 7F 04 0A	        movdqa  [ecx+edx], xmm0
+ 000000A6  83 C2 10		        add     edx, 10H
+ 000000A9  75 F6		        jnz     M200
+				        
+ 000000AB			M300:   ; Do the last irregular part
+				IFDEF   POSITIONINDEPENDENT
+				ENDIF
+				        ; The size of this part is 1 - 16 bytes.
+				        ; It is faster to always write 16 bytes, possibly overlapping
+				        ; with the preceding regular part, than to make possibly mispredicted
+				        ; branches depending on the size of the last part.
+ 000000AB  8B 44 24 04		        mov     eax, [esp+4]           ; dest
+ 000000AF  8B 4C 24 0C		        mov     ecx, [esp+12]          ; count
+ 000000B3  66| 0F D6 44 01	        movq    qword ptr [eax+ecx-10H], xmm0
+	   F0
+ 000000B9  66| 0F D6 44 01	        movq    qword ptr [eax+ecx-8], xmm0
+	   F8
+ 000000BF  C3			        ret
+				   
+ 000000C0			M500:   ; Use non-temporal moves, same code as above:
+				        ; End of regular part:
+				        ; Round down dest+count to nearest preceding 16-bytes boundary
+ 000000C0  8D 4C 11 FF		        lea     ecx, [edx+ecx-1]
+ 000000C4  83 E1 F0		        and     ecx, -10H
+				        
+				        ; Start of regular part:
+				        ; Round up dest to next 16-bytes boundary
+ 000000C7  83 C2 10		        add     edx, 10H
+ 000000CA  83 E2 F0		        and     edx, -10H
+				        
+				        ; -(size of regular part)
+ 000000CD  2B D1		        sub     edx, ecx
+ 000000CF  7D 0A		        jnl     M700                   ; Jump if not negative
+				        
+ 000000D1			M600:   ; Loop through regular part
+				        ; ecx = end of regular part
+				        ; edx = negative index from the end, counting up to zero
+ 000000D1  F3/ 0F 7F 04 0A	        movdqu  [ecx+edx], xmm0
+ 000000D6  83 C2 10		        add     edx, 10H
+ 000000D9  75 F6		        jnz     M600
+				        
+ 000000DB			M700:   ; Do the last irregular part
+				IFDEF   POSITIONINDEPENDENT
+				ENDIF
+				        ; The size of this part is 1 - 16 bytes.
+				        ; It is faster to always write 16 bytes, possibly overlapping
+				        ; with the preceding regular part, than to make possibly mispredicted
+				        ; branches depending on the size of the last part.
+ 000000DB  8B 44 24 04		        mov     eax, [esp+4]           ; dest
+ 000000DF  8B 4C 24 0C		        mov     ecx, [esp+12]          ; count
+ 000000E3  66| 0F D6 44 01	        movq    qword ptr [eax+ecx-10H], xmm0
+	   F0
+ 000000E9  66| 0F D6 44 01	        movq    qword ptr [eax+ecx-8], xmm0
+	   F8
+ 000000EF  C3			        ret
+				     
+				        
+				; 80386 version, ecx > 16
+ 000000F0			memset386:        
+ 000000F0  57			        push    edi
+ 000000F1  8B FA		        mov     edi, edx
+ 000000F3  F7 C7 00000003	N200:   test    edi, 3
+ 000000F9  74 0C		        jz      N300
+				        ; unaligned
+ 000000FB  88 07		N210:   mov     [edi], al              ; store 1 byte until edi aligned
+ 000000FD  47			        inc     edi
+ 000000FE  49			        dec     ecx
+ 000000FF  F7 C7 00000003	        test    edi, 3
+ 00000105  75 F4		        jnz     N210
+ 00000107			N300:   ; aligned
+ 00000107  8B D1		        mov     edx, ecx
+ 00000109  C1 E9 02		        shr     ecx, 2
+ 0000010C  FC			        cld
+ 0000010D  F3/ AB		        rep     stosd                  ; store 4 bytes at a time
+ 0000010F  8B CA		        mov     ecx, edx
+ 00000111  83 E1 03		        and     ecx, 3
+ 00000114  F3/ AA		        rep     stosb                  ; store any remaining bytes
+ 00000116  5F			        pop     edi
+				IFDEF   POSITIONINDEPENDENT
+				ENDIF
+ 00000117  C3			        ret
+				        
+				        
+				; CPU dispatching for memset. This is executed only once
+ 00000118			memsetCPUDispatch:
+				IFNDEF   POSITIONINDEPENDENT
+ 00000118  60			        pushad
+ 00000119  E8 00000000 E	        call    _InstructionSet
+				        ; Point to generic version of memset
+ 0000011E  C7 05 00000044 R	        mov     [memsetDispatch], offset memset386
+	   000000F0 R
+ 00000128  83 F8 04		        cmp     eax, 4                 ; check SSE2
+ 0000012B  72 0A		        jb      Q100
+				        ; SSE2 supported
+				        ; Point to SSE2 version of memset
+ 0000012D  C7 05 00000044 R	        mov     [memsetDispatch], offset memsetSSE2
+	   00000076 R
+ 00000137  61			Q100:   popad
+				        ; Continue in appropriate version of memset
+ 00000138  FF 25 00000044 R	        jmp     [memsetDispatch]
+
+				ELSE    ; Position-independent version
+				ENDIF
+
+ 00000000			.data
+
+				IFNDEF  POSITIONINDEPENDENT
+
+				; Jump table for count from 0 to 16:
+ 00000000 0000002A R		MemsetJTab DD M00, M01, M02, M03, M04, M05, M06, M07
+	   0000003C R
+	   0000004C R
+	   00000038 R
+	   00000028 R
+	   0000005A R
+	   00000049 R
+	   00000035 R
+ 00000020  00000025 R		           DD M08, M09, M10, M11, M12, M13, M14, M15, M16
+	   00000057 R
+	   00000046 R
+	   00000032 R
+	   00000022 R
+	   00000054 R
+	   00000043 R
+	   0000002F R
+	   0000001F R
+
+				; Pointer to appropriate version.
+				; This initially points to memsetCPUDispatch. memsetCPUDispatch will
+				; change this to the appropriate version of memset, so that
+				; memsetCPUDispatch is only executed once:
+ 00000044 00000118 R		memsetDispatch DD memsetCPUDispatch
+
+				ELSE    ; position-independent
+				ENDIF
+
+ 0000013E			.code
+
+ 0000013E			_A_memset endp
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+memset32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000048 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 0000013E Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_A_memset  . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 0000013E Public
+  M16  . . . . . . . . . . . . .	L Near	 0000001F _TEXT	
+  M12  . . . . . . . . . . . . .	L Near	 00000022 _TEXT	
+  M08  . . . . . . . . . . . . .	L Near	 00000025 _TEXT	
+  M04  . . . . . . . . . . . . .	L Near	 00000028 _TEXT	
+  M00  . . . . . . . . . . . . .	L Near	 0000002A _TEXT	
+  M15  . . . . . . . . . . . . .	L Near	 0000002F _TEXT	
+  M11  . . . . . . . . . . . . .	L Near	 00000032 _TEXT	
+  M07  . . . . . . . . . . . . .	L Near	 00000035 _TEXT	
+  M03  . . . . . . . . . . . . .	L Near	 00000038 _TEXT	
+  M01  . . . . . . . . . . . . .	L Near	 0000003C _TEXT	
+  M14  . . . . . . . . . . . . .	L Near	 00000043 _TEXT	
+  M10  . . . . . . . . . . . . .	L Near	 00000046 _TEXT	
+  M06  . . . . . . . . . . . . .	L Near	 00000049 _TEXT	
+  M02  . . . . . . . . . . . . .	L Near	 0000004C _TEXT	
+  M13  . . . . . . . . . . . . .	L Near	 00000054 _TEXT	
+  M09  . . . . . . . . . . . . .	L Near	 00000057 _TEXT	
+  M05  . . . . . . . . . . . . .	L Near	 0000005A _TEXT	
+  M100 . . . . . . . . . . . . .	L Near	 00000070 _TEXT	
+  memsetSSE2 . . . . . . . . . .	L Near	 00000076 _TEXT	
+  M200 . . . . . . . . . . . . .	L Near	 000000A1 _TEXT	
+  M300 . . . . . . . . . . . . .	L Near	 000000AB _TEXT	
+  M500 . . . . . . . . . . . . .	L Near	 000000C0 _TEXT	
+  M600 . . . . . . . . . . . . .	L Near	 000000D1 _TEXT	
+  M700 . . . . . . . . . . . . .	L Near	 000000DB _TEXT	
+  memset386  . . . . . . . . . .	L Near	 000000F0 _TEXT	
+  N200 . . . . . . . . . . . . .	L Near	 000000F3 _TEXT	
+  N210 . . . . . . . . . . . . .	L Near	 000000FB _TEXT	
+  N300 . . . . . . . . . . . . .	L Near	 00000107 _TEXT	
+  memsetCPUDispatch  . . . . . .	L Near	 00000118 _TEXT	
+  Q100 . . . . . . . . . . . . .	L Near	 00000137 _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_memset  . . . . . . . . . .	L Near	 00000000 _TEXT	Public
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+MemsetJTab . . . . . . . . . . .	DWord	 00000000 _DATA	
+_CacheBypassLimit  . . . . . . .	DWord	 00000000 FLAT	External
+_InstructionSet  . . . . . . . .	L Near	 00000000 FLAT	External
+memsetDispatch . . . . . . . . .	DWord	 00000044 _DATA	
+
+	   0 Warnings
+	   0 Errors

@@ -1,0 +1,81 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+round32.asm						     Page 1 - 1
+
+
+				;          ROUND32.ASM                                          Agner Fog 2007
+
+				; © 2003-2007 GNU General Public License www.gnu.org/licenses/gpl.html
+
+				.686
+				.model flat
+
+ 00000000			.code
+
+				; ********** round function **********
+				; C++ prototype:
+				; extern "C" int RoundD (double x);
+				; extern "C" int RoundF (float  x);
+
+				; This function converts a single or double precision floating point number 
+				; to an integer, rounding to nearest or even. Does not check for overflow.
+				; This function is much faster than the default conversion method in C++
+				; which uses truncation.
+
+ 00000000			_RoundD PROC NEAR
+				PUBLIC _RoundD
+ 00000000  DD 44 24 04		        fld     qword ptr [esp+4]      ; Load x
+ 00000004  50			        push    eax                    ; Make temporary space on stack
+ 00000005  DB 1C 24		        fistp   dword ptr [esp]        ; Round. Store in temporary stack space
+ 00000008  58			        pop     eax                    ; Read from temporary stack space
+ 00000009  C3			        ret
+ 0000000A			_RoundD  ENDP
+
+ 0000000A			_RoundF PROC NEAR
+				PUBLIC _RoundF
+ 0000000A  D9 44 24 04		        fld     dword ptr [esp+4]
+ 0000000E  50			        push    eax
+ 0000000F  DB 1C 24		        fistp   dword ptr [esp]
+ 00000012  58			        pop     eax
+ 00000013  C3			        ret
+ 00000014			_RoundF ENDP
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+round32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000000 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 00000014 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_RoundD  . . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 0000000A Public
+_RoundF  . . . . . . . . . . . .	P Near	 0000000A _TEXT	Length= 0000000A Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+
+	   0 Warnings
+	   0 Errors

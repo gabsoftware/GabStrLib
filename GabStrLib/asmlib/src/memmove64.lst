@@ -1,0 +1,2258 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+memmove64.asm						     Page 1 - 1
+
+
+				;*************************  memmove64.asm  ***********************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard memmove function:
+				; void * A_memmove(void * dest, const void * src, size_t count);
+				; Moves 'count' bytes from 'src' to 'dest'. src and dest may overlap.
+				;
+				; Overriding standard function memmove:
+				; The alias ?OVR_memmove is changed to memmove in the object file if
+				; it is desired to override the standard library function memmove.
+				;
+				; Calling conventions: 
+				; Stack alignment is not required. No shadow space or red zone used.
+				; 
+				; Optimization:
+				; Uses XMM registers to copy 16 bytes at a time, aligned.
+				; If source and destination are misaligned relative to each other
+				; then the code will combine parts of every two consecutive 16-bytes 
+				; blocks from the source into one 16-bytes register which is written 
+				; to the destination, aligned.
+				; This method is 2 - 6 times faster than the implementations in the
+				; standard C libraries (MS, Gnu) when src or dest are misaligned.
+				; When src and dest are aligned by 16 (relative to each other) then this
+				; function is only slightly faster than the best standard libraries.
+				; CPU dispatching included for SSE2 and Suppl-SSE3 instruction sets.
+				;
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+
+				public A_memmove                       ; Function A_memmove
+				public ?OVR_memmove                    ; ?OVR removed if standard function memmove overridden
+
+				; Imported from memcpy64.asm:
+				extern CacheBypassLimit: qword         ; Bypass cache if count > CacheBypassLimit
+				extern $memcpyEntry2: near             ; Function entry from memmove
+
+				; Imported from instrset64.asm
+				extern InstructionSet: near            ; Instruction set for CPU dispatcher
+
+				; Define return from this function
+				RETURNM MACRO
+				IFDEF   WINDOWS
+				        pop     rdi
+				        pop     rsi
+				ENDIF
+				        mov     rax, r9                ; Return value = dest
+				        ret
+				ENDM
+
+
+ 00000000			.code
+
+				; extern "C" void * A_memmove(void * dest, const void * src, size_t count);
+				; Function entry:
+ 00000000			A_memmove PROC
+ 00000000			?OVR_memmove LABEL NEAR
+				IFDEF   WINDOWS
+				ELSE    ; Unix
+ 00000000  48/ 8B CA		        mov     rcx, rdx               ; count
+ 00000003  4C/ 8B CF		        mov     r9,  rdi               ; dest
+				ENDIF
+				        
+				        ; Check if dest overlaps src
+ 00000006  48/ 8B C7		        mov     rax, rdi
+ 00000009  48/ 2B C6		        sub     rax, rsi
+ 0000000C  48/ 3B C1		        cmp     rax, rcx
+				        ; We can avoid testing for dest < src by using unsigned compare:
+				        ; Must move backwards if unsigned(dest-src) < count
+ 0000000F  0F 83 00000000 E	        jae     $memcpyEntry2          ; Jump to memcpy if we can move forwards
+				        
+				        ; Cannot use memcpy. Must move backwards because of overlap between src and dest
+ 00000015  48/ 83 F9 40		        cmp     rcx, 40H
+ 00000019  0F 83 00000098	        jae     B100                    ; Use simpler code if count < 64
+				        
+				        ; count < 64. Move 32-16-8-4-2-1 bytes
+ 0000001F  F7 C1 00000020	        test    ecx, 20H
+ 00000025  74 29		        jz      A100
+				        ; move 32 bytes
+				        ; mov is faster than movdqu on current processors,
+				        ; movdqu may be faster on future processors
+ 00000027  83 E9 20		        sub     ecx, 20H
+ 0000002A  48/ 8B 44 31		        mov     rax, [rsi+rcx+18H]
+	   18
+ 0000002F  48/ 8B 54 31		        mov     rdx, [rsi+rcx+10H]
+	   10
+ 00000034  48/ 89 44 39		        mov     [rdi+rcx+18H], rax
+	   18
+ 00000039  48/ 89 54 39		        mov     [rdi+rcx+10H], rdx
+	   10
+ 0000003E  48/ 8B 44 31		        mov     rax, [rsi+rcx+8]
+	   08
+ 00000043  48/ 8B 14 31		        mov     rdx, [rsi+rcx]
+ 00000047  48/ 89 44 39		        mov     [rdi+rcx+8], rax
+	   08
+ 0000004C  48/ 89 14 39		        mov     [rdi+rcx], rdx
+ 00000050  F7 C1 00000010	A100:   test    ecx, 10H
+ 00000056  74 15		        jz      A200
+				        ; move 16 bytes
+ 00000058  83 E9 10		        sub     ecx, 10H
+ 0000005B  48/ 8B 44 31		        mov     rax, [rsi+rcx+8]
+	   08
+ 00000060  48/ 8B 14 31		        mov     rdx, [rsi+rcx]
+ 00000064  48/ 89 44 39		        mov     [rdi+rcx+8], rax
+	   08
+ 00000069  48/ 89 14 39		        mov     [rdi+rcx], rdx
+ 0000006D  F7 C1 00000008	A200:   test    ecx, 8
+ 00000073  74 0B		        jz      A300
+				        ; move 8 bytes
+ 00000075  83 E9 08		        sub     ecx, 8
+ 00000078  48/ 8B 04 31		        mov     rax, [rsi+rcx]
+ 0000007C  48/ 89 04 39		        mov     [rdi+rcx], rax
+ 00000080  F7 C1 00000004	A300:   test    ecx, 4
+ 00000086  74 0B		        jz      A400
+				        ; move 4 bytes
+ 00000088  83 E9 04		        sub     ecx, 4
+ 0000008B  8B 04 31		        mov     eax, [rsi+rcx]
+ 0000008E  89 04 39		        mov     [rdi+rcx], eax
+ 00000091  74 20		        jz      A900                     ; early out if count divisible by 4
+ 00000093  F7 C1 00000002	A400:   test    ecx, 2
+ 00000099  74 0B		        jz      A500
+				        ; move 2 bytes
+ 0000009B  83 E9 02		        sub     ecx, 2
+ 0000009E  0F B7 04 31		        movzx   eax, word ptr [rsi+rcx]
+ 000000A2  66| 89 04 39		        mov     [rdi+rcx], ax
+ 000000A6  F7 C1 00000001	A500:   test    ecx, 1
+ 000000AC  74 05		        jz      A900
+				        ; move 1 byte
+ 000000AE  0F B6 06		        movzx   eax, byte ptr [rsi]
+ 000000B1  88 07		        mov     [rdi], al
+ 000000B3			A900:   ; finished
+				        RETURNM
+ 000000B3  49/ 8B C1	     1	        mov     rax, r9                ; Return value = dest
+ 000000B6  C3		     1	        ret
+				        
+ 000000B7			B100:   ; count >= 64
+				        ; Note: this part will not always work if count < 64
+				        ; Calculate size of last block after last regular boundary of dest
+ 000000B7  8D 14 39		        lea     edx, [rdi+rcx]         ; end of dext
+ 000000BA  83 E2 0F		        and     edx, 0FH
+ 000000BD  74 4C		        jz      B300                   ; Skip if end of dest aligned by 16
+				        
+				        ; edx = size of last partial block, 1 - 15 bytes
+ 000000BF  F7 C2 00000008	        test    edx, 8
+ 000000C5  74 0C		        jz      B200
+				        ; move 8 bytes
+ 000000C7  48/ 83 E9 08		        sub     rcx, 8
+ 000000CB  48/ 8B 04 31		        mov     rax, [rsi+rcx]
+ 000000CF  48/ 89 04 39		        mov     [rdi+rcx], rax
+ 000000D3  F7 C2 00000004	B200:   test    edx, 4
+ 000000D9  74 0A		        jz      B210
+				        ; move 4 bytes
+ 000000DB  48/ 83 E9 04		        sub     rcx, 4
+ 000000DF  8B 04 31		        mov     eax, [rsi+rcx]
+ 000000E2  89 04 39		        mov     [rdi+rcx], eax
+ 000000E5  F7 C2 00000002	B210:   test    edx, 2
+ 000000EB  74 0C		        jz      B220
+				        ; move 2 bytes
+ 000000ED  48/ 83 E9 02		        sub     rcx, 2
+ 000000F1  0F B7 04 31		        movzx   eax, word ptr [rsi+rcx]
+ 000000F5  66| 89 04 39		        mov     [rdi+rcx], ax
+ 000000F9  F7 C2 00000001	B220:   test    edx, 1
+ 000000FF  74 0A		        jz      B300
+				        ; move 1 byte
+ 00000101  48/ FF C9		        dec     rcx
+ 00000104  0F B6 04 31		        movzx   eax, byte ptr [rsi+rcx]
+ 00000108  88 04 39		        mov     [rdi+rcx], al
+				        
+ 0000010B			B300:   ; Now end of dest is aligned by 16. Any partial block has been moved        
+				        ; Find alignment of end of src modulo 16 at this point:
+ 0000010B  8D 04 31		        lea     eax, [rsi+rcx]
+ 0000010E  83 E0 0F		        and     eax, 0FH
+				        
+				        ; Set up for loop moving 32 bytes per iteration:
+ 00000111  8B D1		        mov     edx, ecx               ; Save count
+ 00000113  48/ 83 E1 E0		        and     rcx, -20H              ; Round down to nearest multiple of 32
+ 00000117  2B D1		        sub     edx, ecx               ; Remaining data after loop
+ 00000119  48/ 2B F0		        sub     rsi, rax               ; Nearest preceding aligned block of src
+				        ; Add the same to rsi and rdi as we have subtracted from rcx
+ 0000011C  48/ 03 F2		        add     rsi, rdx
+ 0000011F  48/ 03 FA		        add     rdi, rdx
+				        
+				        ; Check if count very big
+ 00000122  48/ 3B 0D		        cmp     rcx, [CacheBypassLimit]
+	   00000000 E
+ 00000129  77 0B		        ja      B400                   ; Use non-temporal store if count > CacheBypassLimit
+				        
+				        ; Dispatch to different codes depending on src alignment
+ 0000012B  4C/ 8D 05		        lea     r8, MAlignmentDispatch 
+	   00000000 R
+ 00000132  41/ FF 24 C0		        jmp     qword ptr [r8+rax*8]
+
+ 00000136			B400:   ; Dispatch to different codes depending on src alignment
+ 00000136  4C/ 8D 05		        lea     r8, MAlignmentDispatchNT 
+	   00000180 R
+ 0000013D  41/ FF 24 C0		        jmp     qword ptr [r8+rax*8]
+
+
+				align   16
+ 00000150			C100:   ; Code for aligned src.
+				        ; The nice case, src and dest have same alignment.
+
+				        ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000150  48/ 83 E9 20		        sub     rcx, 20H
+ 00000154  0F 28 44 31 10	        movaps  xmm0, [rsi+rcx+10H]
+ 00000159  0F 28 0C 31		        movaps  xmm1, [rsi+rcx]
+ 0000015D  0F 29 44 39 10	        movaps  [rdi+rcx+10H], xmm0
+ 00000162  0F 29 0C 39		        movaps  [rdi+rcx], xmm1
+ 00000166  75 E8		        jnz     C100
+				        
+				        ; Move the remaining edx bytes (0 - 31):
+				        ; move 16-8-4-2-1 bytes, aligned
+ 00000168  85 D2		        test    edx, edx
+ 0000016A  74 66		        jz      C500                   ; Early out if no more data
+ 0000016C  F7 C2 00000010	        test    edx, 10H
+ 00000172  74 0C		        jz      C200
+				        ; move 16 bytes
+ 00000174  48/ 83 E9 10		        sub     rcx, 10H
+ 00000178  0F 28 04 31		        movaps  xmm0, [rsi+rcx]
+ 0000017C  0F 29 04 39		        movaps  [rdi+rcx], xmm0
+ 00000180			C200:   ; Other branches come in here
+ 00000180  85 D2		        test    edx, edx
+ 00000182  74 4E		        jz      C500                   ; Early out if no more data
+ 00000184  F7 C2 00000008	        test    edx, 8
+ 0000018A  74 0C		        jz      C210        
+				        ; move 8 bytes
+ 0000018C  48/ 83 E9 08		        sub     rcx, 8 
+ 00000190  48/ 8B 04 31		        mov     rax, [rsi+rcx]
+ 00000194  48/ 89 04 39		        mov     [rdi+rcx], rax
+ 00000198  F7 C2 00000004	C210:   test    edx, 4
+ 0000019E  74 0C		        jz      C220        
+				        ; move 4 bytes
+ 000001A0  48/ 83 E9 04		        sub     rcx, 4        
+ 000001A4  8B 04 31		        mov     eax, [rsi+rcx]
+ 000001A7  89 04 39		        mov     [rdi+rcx], eax
+ 000001AA  74 26		        jz      C500                   ; Early out if count divisible by 4
+ 000001AC  F7 C2 00000002	C220:   test    edx, 2
+ 000001B2  74 0C		        jz      C230        
+				        ; move 2 bytes
+ 000001B4  48/ 83 E9 02		        sub     rcx, 2
+ 000001B8  0F B7 04 31		        movzx   eax, word ptr [rsi+rcx]
+ 000001BC  66| 89 04 39		        mov     [rdi+rcx], ax
+ 000001C0  F7 C2 00000001	C230:   test    edx, 1
+ 000001C6  74 0A		        jz      C500        
+				        ; move 1 byte
+ 000001C8  48/ FF C9		        dec     rcx
+ 000001CB  0F B6 04 31		        movzx   eax, byte ptr [rsi+rcx]
+ 000001CF  88 04 39		        mov     [rdi+rcx], al
+ 000001D2			C500:   ; finished     
+				        RETURNM
+ 000001D2  49/ 8B C1	     1	        mov     rax, r9                ; Return value = dest
+ 000001D5  C3		     1	        ret
+				        
+				; Code for each src alignment, SSE2 instruction set:
+				; Make separate code for each alignment u because the shift instructions
+				; have the shift count as a constant:
+
+				MOVE_REVERSE_UNALIGNED_SSE2 MACRO u, nt
+				; Move rcx + rdx bytes of data
+				; Source is misaligned. (src-dest) modulo 16 = u
+				; nt = 1 if non-temporal store desired
+				; eax = u
+				; rsi = src - u = nearest preceding 16-bytes boundary
+				; rdi = dest (aligned)
+				; rcx = count rounded down to nearest divisible by 32
+				; edx = remaining bytes to move after loop
+				LOCAL L1, L2
+				        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+				L1:     ; Loop. rcx has positive index from the beginning, counting down to zero
+				        sub     rcx, 20H
+				        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+				        movdqa  xmm2, [rsi+rcx]
+				        movdqa  xmm3, xmm1             ; Copy because used twice
+				        pslldq  xmm0, 16-u             ; shift left
+				        psrldq  xmm1, u                ; shift right
+				        por     xmm0, xmm1             ; combine blocks
+				        IF nt eq 0
+				        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+				        ENDIF
+				        movdqa  xmm0, xmm2             ; Save for next iteration
+				        pslldq  xmm3, 16-u             ; shift left
+				        psrldq  xmm2, u                ; shift right
+				        por     xmm3, xmm2             ; combine blocks
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm3        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm3        ; Save aligned
+				        ENDIF
+				        jnz     L1
+				                
+				        ; Move edx remaining bytes
+				        test    edx, 10H
+				        jz      L2
+				        ; One more 16-bytes block to move
+				        sub     rcx, 10H
+				        movdqa  xmm1, [rsi+rcx]
+				        pslldq  xmm0, 16-u             ; shift left
+				        psrldq  xmm1, u                ; shift right
+				        por     xmm0, xmm1             ; combine blocks
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm0        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm0        ; Save aligned
+				        ENDIF        
+				L2:     ; Get src pointer back to misaligned state
+				        add     rsi, rax
+				        ; Move remaining 0 - 15 bytes, unaligned
+				        jmp     C200
+				ENDM       
+
+				MOVE_REVERSE_UNALIGNED_SSE2_4 MACRO nt
+				; Special case: u = 4
+				LOCAL L1, L2
+				        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+				L1:     ; Loop. rcx has positive index from the beginning, counting down to zero
+				        sub     rcx, 20H
+				        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+				        movdqa  xmm2, [rsi+rcx]
+				        movdqa  xmm3, xmm0
+				        movdqa  xmm0, xmm2        
+				        movss   xmm2, xmm1
+				        pshufd  xmm2, xmm2, 00111001B  ; Rotate right
+				        movss   xmm1, xmm3
+				        pshufd  xmm1, xmm1, 00111001B  ; Rotate right
+				        IF nt eq 0
+				        movdqa  [rdi+rcx+10H], xmm1    ; Save aligned
+				        movdqa  [rdi+rcx], xmm2        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx+10H], xmm1    ; Non-temporal save
+				        movntdq [rdi+rcx], xmm2        ; Non-temporal save
+				        ENDIF
+				        jnz     L1
+				                
+				        ; Move edx remaining bytes
+				        test    edx, 10H
+				        jz      L2
+				        ; One more 16-bytes block to move
+				        sub     rcx, 10H
+				        movdqa  xmm1, [rsi+rcx]
+				        movss   xmm1, xmm0
+				        pshufd  xmm1, xmm1, 00111001B  ; Rotate right
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm1        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm1        ; Non-temporal save
+				        ENDIF        
+				L2:     ; Get src pointer back to misaligned state
+				        add     rsi, rax
+				        ; Move remaining 0 - 15 bytes, unaligned
+				        jmp     C200
+				ENDM       
+
+				MOVE_REVERSE_UNALIGNED_SSE2_8 MACRO nt
+				; Special case: u = 8
+				LOCAL L1, L2
+				        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+				        shufps  xmm0, xmm0, 01001110B  ; Rotate
+				L1:     ; Loop. rcx has positive index from the beginning, counting down to zero
+				        sub     rcx, 20H
+				        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+				        shufps  xmm1, xmm1, 01001110B  ; Rotate
+				        movsd   xmm0, xmm1
+				        IF nt eq 0
+				        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx+10H], xmm0    ; Non-temporal save
+				        ENDIF
+				        movdqa  xmm0, [rsi+rcx]
+				        shufps  xmm0, xmm0, 01001110B  ; Rotate
+				        movsd   xmm1, xmm0
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm1        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm1        ; Non-temporal save
+				        ENDIF
+				        jnz     L1
+				                
+				        ; Move edx remaining bytes
+				        test    edx, 10H
+				        jz      L2
+				        ; One more 16-bytes block to move
+				        sub     rcx, 10H
+				        movdqa  xmm1, [rsi+rcx]
+				        shufps  xmm1, xmm1, 01001110B  ; Rotate 
+				        movsd   xmm0, xmm1
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm0        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm0        ; Non-temporal save
+				        ENDIF        
+				L2:     ; Get src pointer back to misaligned state
+				        add     rsi, rax
+				        ; Move remaining 0 - 15 bytes, unaligned
+				        jmp     C200
+				ENDM       
+
+				MOVE_REVERSE_UNALIGNED_SSE2_12 MACRO nt
+				; Special case: u = 12
+				LOCAL L1, L2
+				        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+				        pshufd  xmm0, xmm0, 10010011B  ; Rotate right
+				L1:     ; Loop. rcx has positive index from the beginning, counting down to zero
+				        sub     rcx, 20H
+				        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+				        pshufd  xmm1, xmm1, 10010011B  ; Rotate left
+				        movss   xmm0, xmm1
+				        IF nt eq 0
+				        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx+10H], xmm0    ; Non-temporal save
+				        ENDIF
+				        movdqa  xmm0, [rsi+rcx]
+				        pshufd  xmm0, xmm0, 10010011B  ; Rotate left
+				        movss   xmm1, xmm0
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm1        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm1        ; Non-temporal save
+				        ENDIF
+				        jnz     L1
+				                
+				        ; Move edx remaining bytes
+				        test    edx, 10H
+				        jz      L2
+				        ; One more 16-bytes block to move
+				        sub     rcx, 10H
+				        movdqa  xmm1, [rsi+rcx]
+				        pshufd  xmm1, xmm1, 10010011B  ; Rotate left
+				        movss   xmm0, xmm1
+				        IF nt eq 0
+				        movdqa  [rdi+rcx], xmm0        ; Save aligned
+				        ELSE
+				        movntdq [rdi+rcx], xmm0        ; Non-temporal save
+				        ENDIF        
+				L2:     ; Get src pointer back to misaligned state
+				        add     rsi, rax
+				        ; Move remaining 0 - 15 bytes, unaligned
+				        jmp     C200
+				ENDM       
+
+				; Code for each src alignment, Suppl.SSE3 instruction set:
+				; Code for unaligned src, Suppl.SSE3 instruction set.
+				; Make separate code for each alignment u because the palignr instruction
+				; has the shift count as a constant:
+
+				MOVE_REVERSE_UNALIGNED_SSSE3 MACRO u
+				; Move rcx + rdx bytes of data
+				; Source is misaligned. (src-dest) modulo 16 = u
+				; eax = u
+				; rsi = src - u = nearest preceding 16-bytes boundary
+				; rdi = dest (aligned)
+				; rcx = - (count rounded down to nearest divisible by 32)
+				; edx = remaining bytes to move after loop
+				LOCAL L1, L2
+				        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+				        
+				L1:     ; Loop. rcx has positive index from the beginning, counting down to zero
+				        sub     rcx, 20H
+				        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+				        palignr xmm0, xmm1, u          ; Combine parts into aligned block
+				        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+				        movdqa  xmm0, [rsi+rcx]
+				        palignr xmm1, xmm0, u          ; Combine parts into aligned block
+				        movdqa  [rdi+rcx], xmm1        ; Save aligned
+				        jnz     L1
+				        
+				        ; Set up for edx remaining bytes
+				        test    edx, 10H
+				        jz      L2
+				        ; One more 16-bytes block to move
+				        sub     rcx, 10H
+				        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+				        palignr xmm0, xmm1, u          ; Combine parts into aligned block
+				        movdqa  [rdi+rcx], xmm0        ; Save aligned
+				        
+				L2:     ; Get src pointer back to misaligned state
+				        add     rsi, rax
+				        ; Move remaining 0 - 15 bytes
+				        jmp     C200
+				ENDM        
+
+				; Make 15 instances of SSE2 macro for each value of the alignment u.
+				; These are pointed to by the jump table MAlignmentDispatchSSE2 below
+				; (alignments are inserted manually to minimize the number of 16-bytes
+				;  boundaries inside loops)
+
+ 000001D6			D101:   MOVE_REVERSE_UNALIGNED_SSE2 1,   0
+ 000001D6  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000001DB		     1	??0000:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000001DB  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000001DF  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000001E5  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 000001EA  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000001EE  66| 0F 73 F8	     1	        pslldq  xmm0, 16-1             ; shift left
+	   0F
+ 000001F3  66| 0F 73 D9	     1	        psrldq  xmm1, 1                ; shift right
+	   01
+ 000001F8  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000001FC  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000202  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000206  66| 0F 73 FB	     1	        pslldq  xmm3, 16-1             ; shift left
+	   0F
+ 0000020B  66| 0F 73 DA	     1	        psrldq  xmm2, 1                ; shift right
+	   01
+ 00000210  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000214  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 00000219  75 C0	     1	        jnz     ??0000
+ 0000021B  F7 C2 00000010    1	        test    edx, 10H
+ 00000221  74 1C	     1	        jz      ??0001
+ 00000223  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000227  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 0000022C  66| 0F 73 F8	     1	        pslldq  xmm0, 16-1             ; shift left
+	   0F
+ 00000231  66| 0F 73 D9	     1	        psrldq  xmm1, 1                ; shift right
+	   01
+ 00000236  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 0000023A  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000023F		     1	??0001:     ; Get src pointer back to misaligned state
+ 0000023F  48/ 03 F0	     1	        add     rsi, rax
+ 00000242  E9 FFFFFF39	     1	        jmp     C200
+ 00000247			D102:   MOVE_REVERSE_UNALIGNED_SSE2 2,   0
+ 00000247  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 0000024C		     1	??0002:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 0000024C  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000250  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000256  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 0000025B  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 0000025F  66| 0F 73 F8	     1	        pslldq  xmm0, 16-2             ; shift left
+	   0E
+ 00000264  66| 0F 73 D9	     1	        psrldq  xmm1, 2                ; shift right
+	   02
+ 00000269  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 0000026D  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000273  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000277  66| 0F 73 FB	     1	        pslldq  xmm3, 16-2             ; shift left
+	   0E
+ 0000027C  66| 0F 73 DA	     1	        psrldq  xmm2, 2                ; shift right
+	   02
+ 00000281  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000285  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 0000028A  75 C0	     1	        jnz     ??0002
+ 0000028C  F7 C2 00000010    1	        test    edx, 10H
+ 00000292  74 1C	     1	        jz      ??0003
+ 00000294  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000298  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 0000029D  66| 0F 73 F8	     1	        pslldq  xmm0, 16-2             ; shift left
+	   0E
+ 000002A2  66| 0F 73 D9	     1	        psrldq  xmm1, 2                ; shift right
+	   02
+ 000002A7  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000002AB  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000002B0		     1	??0003:     ; Get src pointer back to misaligned state
+ 000002B0  48/ 03 F0	     1	        add     rsi, rax
+ 000002B3  E9 FFFFFEC8	     1	        jmp     C200
+ 000002B8			D103:   MOVE_REVERSE_UNALIGNED_SSE2 3,   0
+ 000002B8  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000002BD		     1	??0004:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000002BD  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000002C1  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000002C7  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 000002CC  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000002D0  66| 0F 73 F8	     1	        pslldq  xmm0, 16-3             ; shift left
+	   0D
+ 000002D5  66| 0F 73 D9	     1	        psrldq  xmm1, 3                ; shift right
+	   03
+ 000002DA  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000002DE  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000002E4  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000002E8  66| 0F 73 FB	     1	        pslldq  xmm3, 16-3             ; shift left
+	   0D
+ 000002ED  66| 0F 73 DA	     1	        psrldq  xmm2, 3                ; shift right
+	   03
+ 000002F2  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000002F6  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 000002FB  75 C0	     1	        jnz     ??0004
+ 000002FD  F7 C2 00000010    1	        test    edx, 10H
+ 00000303  74 1C	     1	        jz      ??0005
+ 00000305  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000309  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 0000030E  66| 0F 73 F8	     1	        pslldq  xmm0, 16-3             ; shift left
+	   0D
+ 00000313  66| 0F 73 D9	     1	        psrldq  xmm1, 3                ; shift right
+	   03
+ 00000318  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 0000031C  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000321		     1	??0005:     ; Get src pointer back to misaligned state
+ 00000321  48/ 03 F0	     1	        add     rsi, rax
+ 00000324  E9 FFFFFE57	     1	        jmp     C200
+ 00000329			D104:   MOVE_REVERSE_UNALIGNED_SSE2_4    0
+ 00000329  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 0000032E		     1	??0006:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 0000032E  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000332  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000338  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 0000033D  66| 0F 6F D8	     1	        movdqa  xmm3, xmm0
+ 00000341  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2        
+ 00000345  F3/ 0F 10 D1	     1	        movss   xmm2, xmm1
+ 00000349  66| 0F 70 D2	     1	        pshufd  xmm2, xmm2, 00111001B  ; Rotate right
+	   39
+ 0000034E  F3/ 0F 10 CB	     1	        movss   xmm1, xmm3
+ 00000352  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 00111001B  ; Rotate right
+	   39
+ 00000357  66| 0F 7F 4C 39   1	        movdqa  [rdi+rcx+10H], xmm1    ; Save aligned
+	   10
+ 0000035D  66| 0F 7F 14 39   1	        movdqa  [rdi+rcx], xmm2        ; Save aligned
+ 00000362  75 CA	     1	        jnz     ??0006
+ 00000364  F7 C2 00000010    1	        test    edx, 10H
+ 0000036A  74 17	     1	        jz      ??0007
+ 0000036C  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000370  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000375  F3/ 0F 10 C8	     1	        movss   xmm1, xmm0
+ 00000379  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 00111001B  ; Rotate right
+	   39
+ 0000037E  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000383		     1	??0007:     ; Get src pointer back to misaligned state
+ 00000383  48/ 03 F0	     1	        add     rsi, rax
+ 00000386  E9 FFFFFDF5	     1	        jmp     C200
+ 0000038B			D105:   MOVE_REVERSE_UNALIGNED_SSE2 5,   0
+ 0000038B  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000390		     1	??0008:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000390  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000394  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000039A  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 0000039F  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000003A3  66| 0F 73 F8	     1	        pslldq  xmm0, 16-5             ; shift left
+	   0B
+ 000003A8  66| 0F 73 D9	     1	        psrldq  xmm1, 5                ; shift right
+	   05
+ 000003AD  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000003B1  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000003B7  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000003BB  66| 0F 73 FB	     1	        pslldq  xmm3, 16-5             ; shift left
+	   0B
+ 000003C0  66| 0F 73 DA	     1	        psrldq  xmm2, 5                ; shift right
+	   05
+ 000003C5  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000003C9  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 000003CE  75 C0	     1	        jnz     ??0008
+ 000003D0  F7 C2 00000010    1	        test    edx, 10H
+ 000003D6  74 1C	     1	        jz      ??0009
+ 000003D8  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000003DC  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000003E1  66| 0F 73 F8	     1	        pslldq  xmm0, 16-5             ; shift left
+	   0B
+ 000003E6  66| 0F 73 D9	     1	        psrldq  xmm1, 5                ; shift right
+	   05
+ 000003EB  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000003EF  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000003F4		     1	??0009:     ; Get src pointer back to misaligned state
+ 000003F4  48/ 03 F0	     1	        add     rsi, rax
+ 000003F7  E9 FFFFFD84	     1	        jmp     C200
+				align   8
+ 00000400			D106:   MOVE_REVERSE_UNALIGNED_SSE2 6,   0
+ 00000400  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000405		     1	??000A:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000405  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000409  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000040F  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000414  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000418  66| 0F 73 F8	     1	        pslldq  xmm0, 16-6             ; shift left
+	   0A
+ 0000041D  66| 0F 73 D9	     1	        psrldq  xmm1, 6                ; shift right
+	   06
+ 00000422  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000426  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000042C  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000430  66| 0F 73 FB	     1	        pslldq  xmm3, 16-6             ; shift left
+	   0A
+ 00000435  66| 0F 73 DA	     1	        psrldq  xmm2, 6                ; shift right
+	   06
+ 0000043A  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 0000043E  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 00000443  75 C0	     1	        jnz     ??000A
+ 00000445  F7 C2 00000010    1	        test    edx, 10H
+ 0000044B  74 1C	     1	        jz      ??000B
+ 0000044D  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000451  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000456  66| 0F 73 F8	     1	        pslldq  xmm0, 16-6             ; shift left
+	   0A
+ 0000045B  66| 0F 73 D9	     1	        psrldq  xmm1, 6                ; shift right
+	   06
+ 00000460  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000464  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000469		     1	??000B:     ; Get src pointer back to misaligned state
+ 00000469  48/ 03 F0	     1	        add     rsi, rax
+ 0000046C  E9 FFFFFD0F	     1	        jmp     C200
+ 00000471			D107:   MOVE_REVERSE_UNALIGNED_SSE2 7,   0
+ 00000471  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000476		     1	??000C:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000476  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 0000047A  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000480  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000485  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000489  66| 0F 73 F8	     1	        pslldq  xmm0, 16-7             ; shift left
+	   09
+ 0000048E  66| 0F 73 D9	     1	        psrldq  xmm1, 7                ; shift right
+	   07
+ 00000493  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000497  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000049D  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000004A1  66| 0F 73 FB	     1	        pslldq  xmm3, 16-7             ; shift left
+	   09
+ 000004A6  66| 0F 73 DA	     1	        psrldq  xmm2, 7                ; shift right
+	   07
+ 000004AB  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000004AF  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 000004B4  75 C0	     1	        jnz     ??000C
+ 000004B6  F7 C2 00000010    1	        test    edx, 10H
+ 000004BC  74 1C	     1	        jz      ??000D
+ 000004BE  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000004C2  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000004C7  66| 0F 73 F8	     1	        pslldq  xmm0, 16-7             ; shift left
+	   09
+ 000004CC  66| 0F 73 D9	     1	        psrldq  xmm1, 7                ; shift right
+	   07
+ 000004D1  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000004D5  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000004DA		     1	??000D:     ; Get src pointer back to misaligned state
+ 000004DA  48/ 03 F0	     1	        add     rsi, rax
+ 000004DD  E9 FFFFFC9E	     1	        jmp     C200
+ 000004E2			D108:   MOVE_REVERSE_UNALIGNED_SSE2_8    0
+ 000004E2  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 000004E7  0F C6 C0 4E/	     1	        shufps  xmm0, xmm0, 01001110B  ; Rotate
+ 000004EB		     1	??000E:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000004EB  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000004EF  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000004F5  0F C6 C9 4E/	     1	        shufps  xmm1, xmm1, 01001110B  ; Rotate
+ 000004F9  F2/ 0F 10 C1	     1	        movsd   xmm0, xmm1
+ 000004FD  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000503  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000508  0F C6 C0 4E/	     1	        shufps  xmm0, xmm0, 01001110B  ; Rotate
+ 0000050C  F2/ 0F 10 C8	     1	        movsd   xmm1, xmm0
+ 00000510  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000515  75 D4	     1	        jnz     ??000E
+ 00000517  F7 C2 00000010    1	        test    edx, 10H
+ 0000051D  74 16	     1	        jz      ??000F
+ 0000051F  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000523  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000528  0F C6 C9 4E/	     1	        shufps  xmm1, xmm1, 01001110B  ; Rotate 
+ 0000052C  F2/ 0F 10 C1	     1	        movsd   xmm0, xmm1
+ 00000530  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000535		     1	??000F:     ; Get src pointer back to misaligned state
+ 00000535  48/ 03 F0	     1	        add     rsi, rax
+ 00000538  E9 FFFFFC43	     1	        jmp     C200
+				align   8
+ 00000540			D109:   MOVE_REVERSE_UNALIGNED_SSE2 9,   0
+ 00000540  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000545		     1	??0010:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000545  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000549  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000054F  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000554  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000558  66| 0F 73 F8	     1	        pslldq  xmm0, 16-9             ; shift left
+	   07
+ 0000055D  66| 0F 73 D9	     1	        psrldq  xmm1, 9                ; shift right
+	   09
+ 00000562  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000566  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000056C  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000570  66| 0F 73 FB	     1	        pslldq  xmm3, 16-9             ; shift left
+	   07
+ 00000575  66| 0F 73 DA	     1	        psrldq  xmm2, 9                ; shift right
+	   09
+ 0000057A  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 0000057E  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 00000583  75 C0	     1	        jnz     ??0010
+ 00000585  F7 C2 00000010    1	        test    edx, 10H
+ 0000058B  74 1C	     1	        jz      ??0011
+ 0000058D  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000591  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000596  66| 0F 73 F8	     1	        pslldq  xmm0, 16-9             ; shift left
+	   07
+ 0000059B  66| 0F 73 D9	     1	        psrldq  xmm1, 9                ; shift right
+	   09
+ 000005A0  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000005A4  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000005A9		     1	??0011:     ; Get src pointer back to misaligned state
+ 000005A9  48/ 03 F0	     1	        add     rsi, rax
+ 000005AC  E9 FFFFFBCF	     1	        jmp     C200
+ 000005B1			D10A:   MOVE_REVERSE_UNALIGNED_SSE2 0AH, 0
+ 000005B1  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000005B6		     1	??0012:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000005B6  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000005BA  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000005C0  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 000005C5  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000005C9  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0AH             ; shift left
+	   06
+ 000005CE  66| 0F 73 D9	     1	        psrldq  xmm1, 0AH                ; shift right
+	   0A
+ 000005D3  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000005D7  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000005DD  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000005E1  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0AH             ; shift left
+	   06
+ 000005E6  66| 0F 73 DA	     1	        psrldq  xmm2, 0AH                ; shift right
+	   0A
+ 000005EB  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000005EF  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 000005F4  75 C0	     1	        jnz     ??0012
+ 000005F6  F7 C2 00000010    1	        test    edx, 10H
+ 000005FC  74 1C	     1	        jz      ??0013
+ 000005FE  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000602  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000607  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0AH             ; shift left
+	   06
+ 0000060C  66| 0F 73 D9	     1	        psrldq  xmm1, 0AH                ; shift right
+	   0A
+ 00000611  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000615  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000061A		     1	??0013:     ; Get src pointer back to misaligned state
+ 0000061A  48/ 03 F0	     1	        add     rsi, rax
+ 0000061D  E9 FFFFFB5E	     1	        jmp     C200
+ 00000622			D10B:   MOVE_REVERSE_UNALIGNED_SSE2 0BH, 0
+ 00000622  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000627		     1	??0014:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000627  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 0000062B  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000631  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000636  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 0000063A  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0BH             ; shift left
+	   05
+ 0000063F  66| 0F 73 D9	     1	        psrldq  xmm1, 0BH                ; shift right
+	   0B
+ 00000644  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000648  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000064E  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000652  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0BH             ; shift left
+	   05
+ 00000657  66| 0F 73 DA	     1	        psrldq  xmm2, 0BH                ; shift right
+	   0B
+ 0000065C  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000660  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 00000665  75 C0	     1	        jnz     ??0014
+ 00000667  F7 C2 00000010    1	        test    edx, 10H
+ 0000066D  74 1C	     1	        jz      ??0015
+ 0000066F  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000673  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000678  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0BH             ; shift left
+	   05
+ 0000067D  66| 0F 73 D9	     1	        psrldq  xmm1, 0BH                ; shift right
+	   0B
+ 00000682  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000686  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000068B		     1	??0015:     ; Get src pointer back to misaligned state
+ 0000068B  48/ 03 F0	     1	        add     rsi, rax
+ 0000068E  E9 FFFFFAED	     1	        jmp     C200
+ 00000693			D10C:   MOVE_REVERSE_UNALIGNED_SSE2_12   0
+ 00000693  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000698  66| 0F 70 C0	     1	        pshufd  xmm0, xmm0, 10010011B  ; Rotate right
+	   93
+ 0000069D		     1	??0016:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 0000069D  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000006A1  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000006A7  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 10010011B  ; Rotate left
+	   93
+ 000006AC  F3/ 0F 10 C1	     1	        movss   xmm0, xmm1
+ 000006B0  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000006B6  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 000006BB  66| 0F 70 C0	     1	        pshufd  xmm0, xmm0, 10010011B  ; Rotate left
+	   93
+ 000006C0  F3/ 0F 10 C8	     1	        movss   xmm1, xmm0
+ 000006C4  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 000006C9  75 D2	     1	        jnz     ??0016
+ 000006CB  F7 C2 00000010    1	        test    edx, 10H
+ 000006D1  74 17	     1	        jz      ??0017
+ 000006D3  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000006D7  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000006DC  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 10010011B  ; Rotate left
+	   93
+ 000006E1  F3/ 0F 10 C1	     1	        movss   xmm0, xmm1
+ 000006E5  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000006EA		     1	??0017:     ; Get src pointer back to misaligned state
+ 000006EA  48/ 03 F0	     1	        add     rsi, rax
+ 000006ED  E9 FFFFFA8E	     1	        jmp     C200
+ 000006F2			D10D:   MOVE_REVERSE_UNALIGNED_SSE2 0DH, 0
+ 000006F2  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000006F7		     1	??0018:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000006F7  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000006FB  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000701  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000706  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 0000070A  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0DH             ; shift left
+	   03
+ 0000070F  66| 0F 73 D9	     1	        psrldq  xmm1, 0DH                ; shift right
+	   0D
+ 00000714  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000718  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000071E  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000722  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0DH             ; shift left
+	   03
+ 00000727  66| 0F 73 DA	     1	        psrldq  xmm2, 0DH                ; shift right
+	   0D
+ 0000072C  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000730  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 00000735  75 C0	     1	        jnz     ??0018
+ 00000737  F7 C2 00000010    1	        test    edx, 10H
+ 0000073D  74 1C	     1	        jz      ??0019
+ 0000073F  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000743  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000748  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0DH             ; shift left
+	   03
+ 0000074D  66| 0F 73 D9	     1	        psrldq  xmm1, 0DH                ; shift right
+	   0D
+ 00000752  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000756  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000075B		     1	??0019:     ; Get src pointer back to misaligned state
+ 0000075B  48/ 03 F0	     1	        add     rsi, rax
+ 0000075E  E9 FFFFFA1D	     1	        jmp     C200
+ 00000763			D10E:   MOVE_REVERSE_UNALIGNED_SSE2 0EH, 0
+ 00000763  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000768		     1	??001A:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000768  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 0000076C  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000772  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000777  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 0000077B  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0EH             ; shift left
+	   02
+ 00000780  66| 0F 73 D9	     1	        psrldq  xmm1, 0EH                ; shift right
+	   0E
+ 00000785  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000789  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000078F  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000793  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0EH             ; shift left
+	   02
+ 00000798  66| 0F 73 DA	     1	        psrldq  xmm2, 0EH                ; shift right
+	   0E
+ 0000079D  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000007A1  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 000007A6  75 C0	     1	        jnz     ??001A
+ 000007A8  F7 C2 00000010    1	        test    edx, 10H
+ 000007AE  74 1C	     1	        jz      ??001B
+ 000007B0  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000007B4  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000007B9  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0EH             ; shift left
+	   02
+ 000007BE  66| 0F 73 D9	     1	        psrldq  xmm1, 0EH                ; shift right
+	   0E
+ 000007C3  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000007C7  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000007CC		     1	??001B:     ; Get src pointer back to misaligned state
+ 000007CC  48/ 03 F0	     1	        add     rsi, rax
+ 000007CF  E9 FFFFF9AC	     1	        jmp     C200
+ 000007D4			D10F:   MOVE_REVERSE_UNALIGNED_SSE2 0FH, 0
+ 000007D4  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000007D9		     1	??001C:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000007D9  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000007DD  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000007E3  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 000007E8  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000007EC  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0FH             ; shift left
+	   01
+ 000007F1  66| 0F 73 D9	     1	        psrldq  xmm1, 0FH                ; shift right
+	   0F
+ 000007F6  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000007FA  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000800  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000804  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0FH             ; shift left
+	   01
+ 00000809  66| 0F 73 DA	     1	        psrldq  xmm2, 0FH                ; shift right
+	   0F
+ 0000080E  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000812  66| 0F 7F 1C 39   1	        movdqa  [rdi+rcx], xmm3        ; Save aligned
+ 00000817  75 C0	     1	        jnz     ??001C
+ 00000819  F7 C2 00000010    1	        test    edx, 10H
+ 0000081F  74 1C	     1	        jz      ??001D
+ 00000821  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000825  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 0000082A  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0FH             ; shift left
+	   01
+ 0000082F  66| 0F 73 D9	     1	        psrldq  xmm1, 0FH                ; shift right
+	   0F
+ 00000834  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000838  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000083D		     1	??001D:     ; Get src pointer back to misaligned state
+ 0000083D  48/ 03 F0	     1	        add     rsi, rax
+ 00000840  E9 FFFFF93B	     1	        jmp     C200
+
+				; Make 15 instances of Suppl-SSE3 macro for each value of the alignment u.
+				; These are pointed to by the jump table MAlignmentDispatchSupSSE3 below
+
+				align   16
+ 00000850			E101:   MOVE_REVERSE_UNALIGNED_SSSE3 1
+ 00000850  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000855		     1	??001E:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000855  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000859  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 0000085F  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 1          ; Combine parts into aligned block
+	   01
+ 00000865  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000086B  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000870  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 1          ; Combine parts into aligned block
+	   01
+ 00000876  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 0000087B  75 D8	     1	        jnz     ??001E
+ 0000087D  F7 C2 00000010    1	        test    edx, 10H
+ 00000883  74 14	     1	        jz      ??001F
+ 00000885  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000889  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 0000088E  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 1          ; Combine parts into aligned block
+	   01
+ 00000894  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000899		     1	??001F:     ; Get src pointer back to misaligned state
+ 00000899  48/ 03 F0	     1	        add     rsi, rax
+ 0000089C  E9 FFFFF8DF	     1	        jmp     C200
+ 000008A1			E102:   MOVE_REVERSE_UNALIGNED_SSSE3 2
+ 000008A1  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 000008A6		     1	??0020:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000008A6  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000008AA  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 000008B0  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 2          ; Combine parts into aligned block
+	   02
+ 000008B6  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000008BC  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 000008C1  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 2          ; Combine parts into aligned block
+	   02
+ 000008C7  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 000008CC  75 D8	     1	        jnz     ??0020
+ 000008CE  F7 C2 00000010    1	        test    edx, 10H
+ 000008D4  74 14	     1	        jz      ??0021
+ 000008D6  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000008DA  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 000008DF  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 2          ; Combine parts into aligned block
+	   02
+ 000008E5  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000008EA		     1	??0021:     ; Get src pointer back to misaligned state
+ 000008EA  48/ 03 F0	     1	        add     rsi, rax
+ 000008ED  E9 FFFFF88E	     1	        jmp     C200
+ 000008F2			E103:   MOVE_REVERSE_UNALIGNED_SSSE3 3
+ 000008F2  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 000008F7		     1	??0022:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000008F7  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000008FB  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000901  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 3          ; Combine parts into aligned block
+	   03
+ 00000907  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000090D  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000912  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 3          ; Combine parts into aligned block
+	   03
+ 00000918  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 0000091D  75 D8	     1	        jnz     ??0022
+ 0000091F  F7 C2 00000010    1	        test    edx, 10H
+ 00000925  74 14	     1	        jz      ??0023
+ 00000927  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 0000092B  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000930  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 3          ; Combine parts into aligned block
+	   03
+ 00000936  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000093B		     1	??0023:     ; Get src pointer back to misaligned state
+ 0000093B  48/ 03 F0	     1	        add     rsi, rax
+ 0000093E  E9 FFFFF83D	     1	        jmp     C200
+ 00000943			E104:   MOVE_REVERSE_UNALIGNED_SSSE3 4
+ 00000943  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000948		     1	??0024:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000948  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 0000094C  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000952  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 4          ; Combine parts into aligned block
+	   04 1B
+ 00000958  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000095E  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000963  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 4          ; Combine parts into aligned block
+	   04
+ 00000969  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 0000096E  75 D8	     1	        jnz     ??0024
+ 00000970  F7 C2 00000010    1	        test    edx, 10H
+ 00000976  74 14	     1	        jz      ??0025
+ 00000978  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 0000097C  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000981  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 4          ; Combine parts into aligned block
+	   04 1B
+ 00000987  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 0000098C		     1	??0025:     ; Get src pointer back to misaligned state
+ 0000098C  48/ 03 F0	     1	        add     rsi, rax
+ 0000098F  E9 FFFFF7EC	     1	        jmp     C200
+				align   16
+ 000009A0			E105:   MOVE_REVERSE_UNALIGNED_SSSE3 5
+ 000009A0  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 000009A5		     1	??0026:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000009A5  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000009A9  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 000009AF  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 5          ; Combine parts into aligned block
+	   05
+ 000009B5  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000009BB  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 000009C0  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 5          ; Combine parts into aligned block
+	   05
+ 000009C6  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 000009CB  75 D8	     1	        jnz     ??0026
+ 000009CD  F7 C2 00000010    1	        test    edx, 10H
+ 000009D3  74 14	     1	        jz      ??0027
+ 000009D5  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000009D9  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 000009DE  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 5          ; Combine parts into aligned block
+	   05
+ 000009E4  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 000009E9		     1	??0027:     ; Get src pointer back to misaligned state
+ 000009E9  48/ 03 F0	     1	        add     rsi, rax
+ 000009EC  E9 FFFFF78F	     1	        jmp     C200
+ 000009F1			E106:   MOVE_REVERSE_UNALIGNED_SSSE3 6
+ 000009F1  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 000009F6		     1	??0028:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000009F6  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000009FA  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000A00  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 6          ; Combine parts into aligned block
+	   06
+ 00000A06  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000A0C  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000A11  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 6          ; Combine parts into aligned block
+	   06
+ 00000A17  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000A1C  75 D8	     1	        jnz     ??0028
+ 00000A1E  F7 C2 00000010    1	        test    edx, 10H
+ 00000A24  74 14	     1	        jz      ??0029
+ 00000A26  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000A2A  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000A2F  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 6          ; Combine parts into aligned block
+	   06
+ 00000A35  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000A3A		     1	??0029:     ; Get src pointer back to misaligned state
+ 00000A3A  48/ 03 F0	     1	        add     rsi, rax
+ 00000A3D  E9 FFFFF73E	     1	        jmp     C200
+ 00000A42			E107:   MOVE_REVERSE_UNALIGNED_SSSE3 7
+ 00000A42  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000A47		     1	??002A:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000A47  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000A4B  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000A51  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 7          ; Combine parts into aligned block
+	   07
+ 00000A57  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000A5D  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000A62  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 7          ; Combine parts into aligned block
+	   07
+ 00000A68  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000A6D  75 D8	     1	        jnz     ??002A
+ 00000A6F  F7 C2 00000010    1	        test    edx, 10H
+ 00000A75  74 14	     1	        jz      ??002B
+ 00000A77  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000A7B  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000A80  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 7          ; Combine parts into aligned block
+	   07
+ 00000A86  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000A8B		     1	??002B:     ; Get src pointer back to misaligned state
+ 00000A8B  48/ 03 F0	     1	        add     rsi, rax
+ 00000A8E  E9 FFFFF6ED	     1	        jmp     C200
+ 00000A93			E108:   MOVE_REVERSE_UNALIGNED_SSSE3 8
+ 00000A93  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000A98		     1	??002C:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000A98  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000A9C  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000AA2  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 8          ; Combine parts into aligned block
+	   08
+ 00000AA8  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000AAE  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000AB3  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 8          ; Combine parts into aligned block
+	   08
+ 00000AB9  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000ABE  75 D8	     1	        jnz     ??002C
+ 00000AC0  F7 C2 00000010    1	        test    edx, 10H
+ 00000AC6  74 14	     1	        jz      ??002D
+ 00000AC8  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000ACC  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000AD1  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 8          ; Combine parts into aligned block
+	   08
+ 00000AD7  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000ADC		     1	??002D:     ; Get src pointer back to misaligned state
+ 00000ADC  48/ 03 F0	     1	        add     rsi, rax
+ 00000ADF  E9 FFFFF69C	     1	        jmp     C200
+				align   16
+ 00000AF0			E109:   MOVE_REVERSE_UNALIGNED_SSSE3 9
+ 00000AF0  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000AF5		     1	??002E:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000AF5  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000AF9  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000AFF  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 9          ; Combine parts into aligned block
+	   09
+ 00000B05  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000B0B  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000B10  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 9          ; Combine parts into aligned block
+	   09
+ 00000B16  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000B1B  75 D8	     1	        jnz     ??002E
+ 00000B1D  F7 C2 00000010    1	        test    edx, 10H
+ 00000B23  74 14	     1	        jz      ??002F
+ 00000B25  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000B29  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000B2E  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 9          ; Combine parts into aligned block
+	   09
+ 00000B34  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000B39		     1	??002F:     ; Get src pointer back to misaligned state
+ 00000B39  48/ 03 F0	     1	        add     rsi, rax
+ 00000B3C  E9 FFFFF63F	     1	        jmp     C200
+ 00000B41			E10A:   MOVE_REVERSE_UNALIGNED_SSSE3 0AH
+ 00000B41  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000B46		     1	??0030:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000B46  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000B4A  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000B50  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0AH          ; Combine parts into aligned block
+	   0A
+ 00000B56  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000B5C  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000B61  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 0AH          ; Combine parts into aligned block
+	   0A
+ 00000B67  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000B6C  75 D8	     1	        jnz     ??0030
+ 00000B6E  F7 C2 00000010    1	        test    edx, 10H
+ 00000B74  74 14	     1	        jz      ??0031
+ 00000B76  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000B7A  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000B7F  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0AH          ; Combine parts into aligned block
+	   0A
+ 00000B85  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000B8A		     1	??0031:     ; Get src pointer back to misaligned state
+ 00000B8A  48/ 03 F0	     1	        add     rsi, rax
+ 00000B8D  E9 FFFFF5EE	     1	        jmp     C200
+ 00000B92			E10B:   MOVE_REVERSE_UNALIGNED_SSSE3 0BH
+ 00000B92  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000B97		     1	??0032:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000B97  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000B9B  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000BA1  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0BH          ; Combine parts into aligned block
+	   0B
+ 00000BA7  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000BAD  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000BB2  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 0BH          ; Combine parts into aligned block
+	   0B
+ 00000BB8  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000BBD  75 D8	     1	        jnz     ??0032
+ 00000BBF  F7 C2 00000010    1	        test    edx, 10H
+ 00000BC5  74 14	     1	        jz      ??0033
+ 00000BC7  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000BCB  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000BD0  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0BH          ; Combine parts into aligned block
+	   0B
+ 00000BD6  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000BDB		     1	??0033:     ; Get src pointer back to misaligned state
+ 00000BDB  48/ 03 F0	     1	        add     rsi, rax
+ 00000BDE  E9 FFFFF59D	     1	        jmp     C200
+ 00000BE3			E10C:   MOVE_REVERSE_UNALIGNED_SSSE3 0CH
+ 00000BE3  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000BE8		     1	??0034:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000BE8  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000BEC  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000BF2  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0CH          ; Combine parts into aligned block
+	   0C 1B
+ 00000BF8  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000BFE  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000C03  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 0CH          ; Combine parts into aligned block
+	   0C
+ 00000C09  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000C0E  75 D8	     1	        jnz     ??0034
+ 00000C10  F7 C2 00000010    1	        test    edx, 10H
+ 00000C16  74 14	     1	        jz      ??0035
+ 00000C18  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000C1C  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000C21  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0CH          ; Combine parts into aligned block
+	   0C 1B
+ 00000C27  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000C2C		     1	??0035:     ; Get src pointer back to misaligned state
+ 00000C2C  48/ 03 F0	     1	        add     rsi, rax
+ 00000C2F  E9 FFFFF54C	     1	        jmp     C200
+				align   16
+ 00000C40			E10D:   MOVE_REVERSE_UNALIGNED_SSSE3 0DH
+ 00000C40  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000C45		     1	??0036:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000C45  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000C49  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000C4F  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0DH          ; Combine parts into aligned block
+	   0D
+ 00000C55  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000C5B  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000C60  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 0DH          ; Combine parts into aligned block
+	   0D
+ 00000C66  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000C6B  75 D8	     1	        jnz     ??0036
+ 00000C6D  F7 C2 00000010    1	        test    edx, 10H
+ 00000C73  74 14	     1	        jz      ??0037
+ 00000C75  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000C79  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000C7E  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0DH          ; Combine parts into aligned block
+	   0D
+ 00000C84  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000C89		     1	??0037:     ; Get src pointer back to misaligned state
+ 00000C89  48/ 03 F0	     1	        add     rsi, rax
+ 00000C8C  E9 FFFFF4EF	     1	        jmp     C200
+ 00000C91			E10E:   MOVE_REVERSE_UNALIGNED_SSSE3 0EH
+ 00000C91  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000C96		     1	??0038:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000C96  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000C9A  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000CA0  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0EH          ; Combine parts into aligned block
+	   0E
+ 00000CA6  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000CAC  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000CB1  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 0EH          ; Combine parts into aligned block
+	   0E
+ 00000CB7  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000CBC  75 D8	     1	        jnz     ??0038
+ 00000CBE  F7 C2 00000010    1	        test    edx, 10H
+ 00000CC4  74 14	     1	        jz      ??0039
+ 00000CC6  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000CCA  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000CCF  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0EH          ; Combine parts into aligned block
+	   0E
+ 00000CD5  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000CDA		     1	??0039:     ; Get src pointer back to misaligned state
+ 00000CDA  48/ 03 F0	     1	        add     rsi, rax
+ 00000CDD  E9 FFFFF49E	     1	        jmp     C200
+ 00000CE2			E10F:   MOVE_REVERSE_UNALIGNED_SSSE3 0FH
+ 00000CE2  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000CE7		     1	??003A:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000CE7  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000CEB  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks        
+	   10
+ 00000CF1  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0FH          ; Combine parts into aligned block
+	   0F
+ 00000CF7  66| 0F 7F 44 39   1	        movdqa  [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000CFD  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00000D02  66| 0F 3A 0F C8   1	        palignr xmm1, xmm0, 0FH          ; Combine parts into aligned block
+	   0F 1B
+ 00000D08  66| 0F 7F 0C 39   1	        movdqa  [rdi+rcx], xmm1        ; Save aligned
+ 00000D0D  75 D8	     1	        jnz     ??003A
+ 00000D0F  F7 C2 00000010    1	        test    edx, 10H
+ 00000D15  74 14	     1	        jz      ??003B
+ 00000D17  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000D1B  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]        ; Read next two blocks        
+ 00000D20  66| 0F 3A 0F C1   1	        palignr xmm0, xmm1, 0FH          ; Combine parts into aligned block
+	   0F
+ 00000D26  66| 0F 7F 04 39   1	        movdqa  [rdi+rcx], xmm0        ; Save aligned
+ 00000D2B		     1	??003B:     ; Get src pointer back to misaligned state
+ 00000D2B  48/ 03 F0	     1	        add     rsi, rax
+ 00000D2E  E9 FFFFF44D	     1	        jmp     C200
+
+				        
+ 00000D33			F100:   ; Non-temporal move, src and dest have same alignment.
+				        ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000D33  48/ 83 E9 20		        sub     rcx, 20H
+ 00000D37  0F 28 44 31 10	        movaps  xmm0, [rsi+rcx+10H]
+ 00000D3C  0F 28 0C 31		        movaps  xmm1, [rsi+rcx]
+ 00000D40  0F 2B 44 39 10	        movntps [rdi+rcx+10H], xmm0
+ 00000D45  0F 2B 0C 39		        movntps [rdi+rcx], xmm1
+ 00000D49  75 E8		        jnz     F100
+				        
+				        ; Move the remaining edx bytes (0 - 31):
+				        ; move 16-8-4-2-1 bytes, aligned
+ 00000D4B  F7 C2 00000010	        test    edx, 10H
+ 00000D51  0F 84 FFFFF429	        jz      C200
+				        ; move 16 bytes
+ 00000D57  48/ 83 E9 10		        sub     rcx, 10H
+ 00000D5B  0F 28 04 31		        movaps  xmm0, [rsi+rcx]
+ 00000D5F  0F 2B 04 39		        movntps  [rdi+rcx], xmm0
+				        ; move the remaining 0 - 15 bytes
+ 00000D63  E9 FFFFF418		        jmp     C200
+
+				; Non-temporal move, src and dest have different alignment.
+				; Make 15 instances of SSE2 macro for each value of the alignment u.
+				; These are pointed to by the jump table MAlignmentDispatchNT below
+
+ 00000D68			F101:   MOVE_REVERSE_UNALIGNED_SSE2 1,   1
+ 00000D68  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000D6D		     1	??003C:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000D6D  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000D71  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000D77  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000D7C  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000D80  66| 0F 73 F8	     1	        pslldq  xmm0, 16-1             ; shift left
+	   0F
+ 00000D85  66| 0F 73 D9	     1	        psrldq  xmm1, 1                ; shift right
+	   01
+ 00000D8A  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000D8E  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000D94  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000D98  66| 0F 73 FB	     1	        pslldq  xmm3, 16-1             ; shift left
+	   0F
+ 00000D9D  66| 0F 73 DA	     1	        psrldq  xmm2, 1                ; shift right
+	   01
+ 00000DA2  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000DA6  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00000DAB  75 C0	     1	        jnz     ??003C
+ 00000DAD  F7 C2 00000010    1	        test    edx, 10H
+ 00000DB3  74 1C	     1	        jz      ??003D
+ 00000DB5  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000DB9  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000DBE  66| 0F 73 F8	     1	        pslldq  xmm0, 16-1             ; shift left
+	   0F
+ 00000DC3  66| 0F 73 D9	     1	        psrldq  xmm1, 1                ; shift right
+	   01
+ 00000DC8  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000DCC  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00000DD1		     1	??003D:     ; Get src pointer back to misaligned state
+ 00000DD1  48/ 03 F0	     1	        add     rsi, rax
+ 00000DD4  E9 FFFFF3A7	     1	        jmp     C200
+ 00000DD9			F102:   MOVE_REVERSE_UNALIGNED_SSE2 2,   1
+ 00000DD9  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000DDE		     1	??003E:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000DDE  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000DE2  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000DE8  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000DED  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000DF1  66| 0F 73 F8	     1	        pslldq  xmm0, 16-2             ; shift left
+	   0E
+ 00000DF6  66| 0F 73 D9	     1	        psrldq  xmm1, 2                ; shift right
+	   02
+ 00000DFB  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000DFF  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000E05  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000E09  66| 0F 73 FB	     1	        pslldq  xmm3, 16-2             ; shift left
+	   0E
+ 00000E0E  66| 0F 73 DA	     1	        psrldq  xmm2, 2                ; shift right
+	   02
+ 00000E13  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000E17  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00000E1C  75 C0	     1	        jnz     ??003E
+ 00000E1E  F7 C2 00000010    1	        test    edx, 10H
+ 00000E24  74 1C	     1	        jz      ??003F
+ 00000E26  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000E2A  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000E2F  66| 0F 73 F8	     1	        pslldq  xmm0, 16-2             ; shift left
+	   0E
+ 00000E34  66| 0F 73 D9	     1	        psrldq  xmm1, 2                ; shift right
+	   02
+ 00000E39  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000E3D  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00000E42		     1	??003F:     ; Get src pointer back to misaligned state
+ 00000E42  48/ 03 F0	     1	        add     rsi, rax
+ 00000E45  E9 FFFFF336	     1	        jmp     C200
+ 00000E4A			F103:   MOVE_REVERSE_UNALIGNED_SSE2 3,   1
+ 00000E4A  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000E4F		     1	??0040:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000E4F  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000E53  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000E59  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000E5E  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000E62  66| 0F 73 F8	     1	        pslldq  xmm0, 16-3             ; shift left
+	   0D
+ 00000E67  66| 0F 73 D9	     1	        psrldq  xmm1, 3                ; shift right
+	   03
+ 00000E6C  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000E70  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000E76  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000E7A  66| 0F 73 FB	     1	        pslldq  xmm3, 16-3             ; shift left
+	   0D
+ 00000E7F  66| 0F 73 DA	     1	        psrldq  xmm2, 3                ; shift right
+	   03
+ 00000E84  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000E88  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00000E8D  75 C0	     1	        jnz     ??0040
+ 00000E8F  F7 C2 00000010    1	        test    edx, 10H
+ 00000E95  74 1C	     1	        jz      ??0041
+ 00000E97  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000E9B  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000EA0  66| 0F 73 F8	     1	        pslldq  xmm0, 16-3             ; shift left
+	   0D
+ 00000EA5  66| 0F 73 D9	     1	        psrldq  xmm1, 3                ; shift right
+	   03
+ 00000EAA  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000EAE  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00000EB3		     1	??0041:     ; Get src pointer back to misaligned state
+ 00000EB3  48/ 03 F0	     1	        add     rsi, rax
+ 00000EB6  E9 FFFFF2C5	     1	        jmp     C200
+ 00000EBB			F104:   MOVE_REVERSE_UNALIGNED_SSE2_4    1
+ 00000EBB  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00000EC0		     1	??0042:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000EC0  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000EC4  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000ECA  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000ECF  66| 0F 6F D8	     1	        movdqa  xmm3, xmm0
+ 00000ED3  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2        
+ 00000ED7  F3/ 0F 10 D1	     1	        movss   xmm2, xmm1
+ 00000EDB  66| 0F 70 D2	     1	        pshufd  xmm2, xmm2, 00111001B  ; Rotate right
+	   39
+ 00000EE0  F3/ 0F 10 CB	     1	        movss   xmm1, xmm3
+ 00000EE4  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 00111001B  ; Rotate right
+	   39
+ 00000EE9  66| 0F E7 4C 39   1	        movntdq [rdi+rcx+10H], xmm1    ; Non-temporal save
+	   10
+ 00000EEF  66| 0F E7 14 39   1	        movntdq [rdi+rcx], xmm2        ; Non-temporal save
+ 00000EF4  75 CA	     1	        jnz     ??0042
+ 00000EF6  F7 C2 00000010    1	        test    edx, 10H
+ 00000EFC  74 17	     1	        jz      ??0043
+ 00000EFE  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000F02  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000F07  F3/ 0F 10 C8	     1	        movss   xmm1, xmm0
+ 00000F0B  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 00111001B  ; Rotate right
+	   39
+ 00000F10  66| 0F E7 0C 39   1	        movntdq [rdi+rcx], xmm1        ; Non-temporal save
+ 00000F15		     1	??0043:     ; Get src pointer back to misaligned state
+ 00000F15  48/ 03 F0	     1	        add     rsi, rax
+ 00000F18  E9 FFFFF263	     1	        jmp     C200
+ 00000F1D			F105:   MOVE_REVERSE_UNALIGNED_SSE2 5,   1
+ 00000F1D  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000F22		     1	??0044:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000F22  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000F26  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000F2C  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000F31  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000F35  66| 0F 73 F8	     1	        pslldq  xmm0, 16-5             ; shift left
+	   0B
+ 00000F3A  66| 0F 73 D9	     1	        psrldq  xmm1, 5                ; shift right
+	   05
+ 00000F3F  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000F43  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000F49  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000F4D  66| 0F 73 FB	     1	        pslldq  xmm3, 16-5             ; shift left
+	   0B
+ 00000F52  66| 0F 73 DA	     1	        psrldq  xmm2, 5                ; shift right
+	   05
+ 00000F57  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000F5B  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00000F60  75 C0	     1	        jnz     ??0044
+ 00000F62  F7 C2 00000010    1	        test    edx, 10H
+ 00000F68  74 1C	     1	        jz      ??0045
+ 00000F6A  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000F6E  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000F73  66| 0F 73 F8	     1	        pslldq  xmm0, 16-5             ; shift left
+	   0B
+ 00000F78  66| 0F 73 D9	     1	        psrldq  xmm1, 5                ; shift right
+	   05
+ 00000F7D  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000F81  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00000F86		     1	??0045:     ; Get src pointer back to misaligned state
+ 00000F86  48/ 03 F0	     1	        add     rsi, rax
+ 00000F89  E9 FFFFF1F2	     1	        jmp     C200
+ 00000F8E			F106:   MOVE_REVERSE_UNALIGNED_SSE2 6,   1
+ 00000F8E  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00000F93		     1	??0046:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00000F93  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00000F97  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00000F9D  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00000FA2  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00000FA6  66| 0F 73 F8	     1	        pslldq  xmm0, 16-6             ; shift left
+	   0A
+ 00000FAB  66| 0F 73 D9	     1	        psrldq  xmm1, 6                ; shift right
+	   06
+ 00000FB0  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000FB4  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00000FBA  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 00000FBE  66| 0F 73 FB	     1	        pslldq  xmm3, 16-6             ; shift left
+	   0A
+ 00000FC3  66| 0F 73 DA	     1	        psrldq  xmm2, 6                ; shift right
+	   06
+ 00000FC8  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00000FCC  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00000FD1  75 C0	     1	        jnz     ??0046
+ 00000FD3  F7 C2 00000010    1	        test    edx, 10H
+ 00000FD9  74 1C	     1	        jz      ??0047
+ 00000FDB  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00000FDF  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00000FE4  66| 0F 73 F8	     1	        pslldq  xmm0, 16-6             ; shift left
+	   0A
+ 00000FE9  66| 0F 73 D9	     1	        psrldq  xmm1, 6                ; shift right
+	   06
+ 00000FEE  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00000FF2  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00000FF7		     1	??0047:     ; Get src pointer back to misaligned state
+ 00000FF7  48/ 03 F0	     1	        add     rsi, rax
+ 00000FFA  E9 FFFFF181	     1	        jmp     C200
+ 00000FFF			F107:   MOVE_REVERSE_UNALIGNED_SSE2 7,   1
+ 00000FFF  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00001004		     1	??0048:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00001004  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00001008  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000100E  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00001013  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00001017  66| 0F 73 F8	     1	        pslldq  xmm0, 16-7             ; shift left
+	   09
+ 0000101C  66| 0F 73 D9	     1	        psrldq  xmm1, 7                ; shift right
+	   07
+ 00001021  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001025  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000102B  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 0000102F  66| 0F 73 FB	     1	        pslldq  xmm3, 16-7             ; shift left
+	   09
+ 00001034  66| 0F 73 DA	     1	        psrldq  xmm2, 7                ; shift right
+	   07
+ 00001039  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 0000103D  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00001042  75 C0	     1	        jnz     ??0048
+ 00001044  F7 C2 00000010    1	        test    edx, 10H
+ 0000104A  74 1C	     1	        jz      ??0049
+ 0000104C  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00001050  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00001055  66| 0F 73 F8	     1	        pslldq  xmm0, 16-7             ; shift left
+	   09
+ 0000105A  66| 0F 73 D9	     1	        psrldq  xmm1, 7                ; shift right
+	   07
+ 0000105F  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001063  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00001068		     1	??0049:     ; Get src pointer back to misaligned state
+ 00001068  48/ 03 F0	     1	        add     rsi, rax
+ 0000106B  E9 FFFFF110	     1	        jmp     C200
+ 00001070			F108:   MOVE_REVERSE_UNALIGNED_SSE2_8    1
+ 00001070  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00001075  0F C6 C0 4E/	     1	        shufps  xmm0, xmm0, 01001110B  ; Rotate
+ 00001079		     1	??004A:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00001079  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 0000107D  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00001083  0F C6 C9 4E/	     1	        shufps  xmm1, xmm1, 01001110B  ; Rotate
+ 00001087  F2/ 0F 10 C1	     1	        movsd   xmm0, xmm1
+ 0000108B  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Non-temporal save
+	   10
+ 00001091  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00001096  0F C6 C0 4E/	     1	        shufps  xmm0, xmm0, 01001110B  ; Rotate
+ 0000109A  F2/ 0F 10 C8	     1	        movsd   xmm1, xmm0
+ 0000109E  66| 0F E7 0C 39   1	        movntdq [rdi+rcx], xmm1        ; Non-temporal save
+ 000010A3  75 D4	     1	        jnz     ??004A
+ 000010A5  F7 C2 00000010    1	        test    edx, 10H
+ 000010AB  74 16	     1	        jz      ??004B
+ 000010AD  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000010B1  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000010B6  0F C6 C9 4E/	     1	        shufps  xmm1, xmm1, 01001110B  ; Rotate 
+ 000010BA  F2/ 0F 10 C1	     1	        movsd   xmm0, xmm1
+ 000010BE  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Non-temporal save
+ 000010C3		     1	??004B:     ; Get src pointer back to misaligned state
+ 000010C3  48/ 03 F0	     1	        add     rsi, rax
+ 000010C6  E9 FFFFF0B5	     1	        jmp     C200
+ 000010CB			F109:   MOVE_REVERSE_UNALIGNED_SSE2 9,   1
+ 000010CB  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000010D0		     1	??004C:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000010D0  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000010D4  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000010DA  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 000010DF  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000010E3  66| 0F 73 F8	     1	        pslldq  xmm0, 16-9             ; shift left
+	   07
+ 000010E8  66| 0F 73 D9	     1	        psrldq  xmm1, 9                ; shift right
+	   09
+ 000010ED  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000010F1  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000010F7  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000010FB  66| 0F 73 FB	     1	        pslldq  xmm3, 16-9             ; shift left
+	   07
+ 00001100  66| 0F 73 DA	     1	        psrldq  xmm2, 9                ; shift right
+	   09
+ 00001105  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 00001109  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 0000110E  75 C0	     1	        jnz     ??004C
+ 00001110  F7 C2 00000010    1	        test    edx, 10H
+ 00001116  74 1C	     1	        jz      ??004D
+ 00001118  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 0000111C  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00001121  66| 0F 73 F8	     1	        pslldq  xmm0, 16-9             ; shift left
+	   07
+ 00001126  66| 0F 73 D9	     1	        psrldq  xmm1, 9                ; shift right
+	   09
+ 0000112B  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 0000112F  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00001134		     1	??004D:     ; Get src pointer back to misaligned state
+ 00001134  48/ 03 F0	     1	        add     rsi, rax
+ 00001137  E9 FFFFF044	     1	        jmp     C200
+ 0000113C			F10A:   MOVE_REVERSE_UNALIGNED_SSE2 0AH, 1
+ 0000113C  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00001141		     1	??004E:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00001141  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00001145  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000114B  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00001150  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00001154  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0AH             ; shift left
+	   06
+ 00001159  66| 0F 73 D9	     1	        psrldq  xmm1, 0AH                ; shift right
+	   0A
+ 0000115E  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001162  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 00001168  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 0000116C  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0AH             ; shift left
+	   06
+ 00001171  66| 0F 73 DA	     1	        psrldq  xmm2, 0AH                ; shift right
+	   0A
+ 00001176  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 0000117A  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 0000117F  75 C0	     1	        jnz     ??004E
+ 00001181  F7 C2 00000010    1	        test    edx, 10H
+ 00001187  74 1C	     1	        jz      ??004F
+ 00001189  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 0000118D  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00001192  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0AH             ; shift left
+	   06
+ 00001197  66| 0F 73 D9	     1	        psrldq  xmm1, 0AH                ; shift right
+	   0A
+ 0000119C  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000011A0  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 000011A5		     1	??004F:     ; Get src pointer back to misaligned state
+ 000011A5  48/ 03 F0	     1	        add     rsi, rax
+ 000011A8  E9 FFFFEFD3	     1	        jmp     C200
+ 000011AD			F10B:   MOVE_REVERSE_UNALIGNED_SSE2 0BH, 1
+ 000011AD  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000011B2		     1	??0050:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000011B2  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000011B6  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000011BC  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 000011C1  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 000011C5  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0BH             ; shift left
+	   05
+ 000011CA  66| 0F 73 D9	     1	        psrldq  xmm1, 0BH                ; shift right
+	   0B
+ 000011CF  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000011D3  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000011D9  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000011DD  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0BH             ; shift left
+	   05
+ 000011E2  66| 0F 73 DA	     1	        psrldq  xmm2, 0BH                ; shift right
+	   0B
+ 000011E7  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000011EB  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 000011F0  75 C0	     1	        jnz     ??0050
+ 000011F2  F7 C2 00000010    1	        test    edx, 10H
+ 000011F8  74 1C	     1	        jz      ??0051
+ 000011FA  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000011FE  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00001203  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0BH             ; shift left
+	   05
+ 00001208  66| 0F 73 D9	     1	        psrldq  xmm1, 0BH                ; shift right
+	   0B
+ 0000120D  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001211  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00001216		     1	??0051:     ; Get src pointer back to misaligned state
+ 00001216  48/ 03 F0	     1	        add     rsi, rax
+ 00001219  E9 FFFFEF62	     1	        jmp     C200
+ 0000121E			F10C:   MOVE_REVERSE_UNALIGNED_SSE2_12   1
+ 0000121E  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary
+ 00001223  66| 0F 70 C0	     1	        pshufd  xmm0, xmm0, 10010011B  ; Rotate right
+	   93
+ 00001228		     1	??0052:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00001228  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 0000122C  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 00001232  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 10010011B  ; Rotate left
+	   93
+ 00001237  F3/ 0F 10 C1	     1	        movss   xmm0, xmm1
+ 0000123B  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Non-temporal save
+	   10
+ 00001241  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]
+ 00001246  66| 0F 70 C0	     1	        pshufd  xmm0, xmm0, 10010011B  ; Rotate left
+	   93
+ 0000124B  F3/ 0F 10 C8	     1	        movss   xmm1, xmm0
+ 0000124F  66| 0F E7 0C 39   1	        movntdq [rdi+rcx], xmm1        ; Non-temporal save
+ 00001254  75 D2	     1	        jnz     ??0052
+ 00001256  F7 C2 00000010    1	        test    edx, 10H
+ 0000125C  74 17	     1	        jz      ??0053
+ 0000125E  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 00001262  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00001267  66| 0F 70 C9	     1	        pshufd  xmm1, xmm1, 10010011B  ; Rotate left
+	   93
+ 0000126C  F3/ 0F 10 C1	     1	        movss   xmm0, xmm1
+ 00001270  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Non-temporal save
+ 00001275		     1	??0053:     ; Get src pointer back to misaligned state
+ 00001275  48/ 03 F0	     1	        add     rsi, rax
+ 00001278  E9 FFFFEF03	     1	        jmp     C200
+ 0000127D			F10D:   MOVE_REVERSE_UNALIGNED_SSE2 0DH, 1
+ 0000127D  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00001282		     1	??0054:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00001282  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00001286  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000128C  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00001291  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00001295  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0DH             ; shift left
+	   03
+ 0000129A  66| 0F 73 D9	     1	        psrldq  xmm1, 0DH                ; shift right
+	   0D
+ 0000129F  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000012A3  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 000012A9  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 000012AD  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0DH             ; shift left
+	   03
+ 000012B2  66| 0F 73 DA	     1	        psrldq  xmm2, 0DH                ; shift right
+	   0D
+ 000012B7  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 000012BB  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 000012C0  75 C0	     1	        jnz     ??0054
+ 000012C2  F7 C2 00000010    1	        test    edx, 10H
+ 000012C8  74 1C	     1	        jz      ??0055
+ 000012CA  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000012CE  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000012D3  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0DH             ; shift left
+	   03
+ 000012D8  66| 0F 73 D9	     1	        psrldq  xmm1, 0DH                ; shift right
+	   0D
+ 000012DD  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000012E1  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 000012E6		     1	??0055:     ; Get src pointer back to misaligned state
+ 000012E6  48/ 03 F0	     1	        add     rsi, rax
+ 000012E9  E9 FFFFEE92	     1	        jmp     C200
+ 000012EE			F10E:   MOVE_REVERSE_UNALIGNED_SSE2 0EH, 1
+ 000012EE  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 000012F3		     1	??0056:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 000012F3  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 000012F7  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 000012FD  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00001302  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00001306  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0EH             ; shift left
+	   02
+ 0000130B  66| 0F 73 D9	     1	        psrldq  xmm1, 0EH                ; shift right
+	   0E
+ 00001310  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001314  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000131A  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 0000131E  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0EH             ; shift left
+	   02
+ 00001323  66| 0F 73 DA	     1	        psrldq  xmm2, 0EH                ; shift right
+	   0E
+ 00001328  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 0000132C  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 00001331  75 C0	     1	        jnz     ??0056
+ 00001333  F7 C2 00000010    1	        test    edx, 10H
+ 00001339  74 1C	     1	        jz      ??0057
+ 0000133B  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 0000133F  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 00001344  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0EH             ; shift left
+	   02
+ 00001349  66| 0F 73 D9	     1	        psrldq  xmm1, 0EH                ; shift right
+	   0E
+ 0000134E  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001352  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 00001357		     1	??0057:     ; Get src pointer back to misaligned state
+ 00001357  48/ 03 F0	     1	        add     rsi, rax
+ 0000135A  E9 FFFFEE21	     1	        jmp     C200
+ 0000135F			F10F:   MOVE_REVERSE_UNALIGNED_SSE2 0FH, 1
+ 0000135F  66| 0F 6F 04 31   1	        movdqa  xmm0, [rsi+rcx]        ; Read from nearest following 16B boundary        
+ 00001364		     1	??0058:     ; Loop. rcx has positive index from the beginning, counting down to zero
+ 00001364  48/ 83 E9 20	     1	        sub     rcx, 20H
+ 00001368  66| 0F 6F 4C 31   1	        movdqa  xmm1, [rsi+rcx+10H]    ; Read next two blocks aligned
+	   10
+ 0000136E  66| 0F 6F 14 31   1	        movdqa  xmm2, [rsi+rcx]
+ 00001373  66| 0F 6F D9	     1	        movdqa  xmm3, xmm1             ; Copy because used twice
+ 00001377  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0FH             ; shift left
+	   01
+ 0000137C  66| 0F 73 D9	     1	        psrldq  xmm1, 0FH                ; shift right
+	   0F
+ 00001381  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 00001385  66| 0F E7 44 39   1	        movntdq [rdi+rcx+10H], xmm0    ; Save aligned
+	   10
+ 0000138B  66| 0F 6F C2	     1	        movdqa  xmm0, xmm2             ; Save for next iteration
+ 0000138F  66| 0F 73 FB	     1	        pslldq  xmm3, 16-0FH             ; shift left
+	   01
+ 00001394  66| 0F 73 DA	     1	        psrldq  xmm2, 0FH                ; shift right
+	   0F
+ 00001399  66| 0F EB DA	     1	        por     xmm3, xmm2             ; combine blocks
+ 0000139D  66| 0F E7 1C 39   1	        movntdq [rdi+rcx], xmm3        ; Save aligned
+ 000013A2  75 C0	     1	        jnz     ??0058
+ 000013A4  F7 C2 00000010    1	        test    edx, 10H
+ 000013AA  74 1C	     1	        jz      ??0059
+ 000013AC  48/ 83 E9 10	     1	        sub     rcx, 10H
+ 000013B0  66| 0F 6F 0C 31   1	        movdqa  xmm1, [rsi+rcx]
+ 000013B5  66| 0F 73 F8	     1	        pslldq  xmm0, 16-0FH             ; shift left
+	   01
+ 000013BA  66| 0F 73 D9	     1	        psrldq  xmm1, 0FH                ; shift right
+	   0F
+ 000013BF  66| 0F EB C1	     1	        por     xmm0, xmm1             ; combine blocks
+ 000013C3  66| 0F E7 04 39   1	        movntdq [rdi+rcx], xmm0        ; Save aligned
+ 000013C8		     1	??0059:     ; Get src pointer back to misaligned state
+ 000013C8  48/ 03 F0	     1	        add     rsi, rax
+ 000013CB  E9 FFFFEDB0	     1	        jmp     C200
+
+
+ 000013D0			Q100:   ; CPU dispatcher, check for Suppl-SSE3 instruction set
+				        ; This part is executed only once, optimized for size
+ 000013D0  50			        push    rax
+ 000013D1  53			        push    rbx
+ 000013D2  51			        push    rcx
+ 000013D3  52			        push    rdx
+ 000013D4  56			        push    rsi
+ 000013D5  57			        push    rdi
+ 000013D6  B8 00000001		        mov     eax, 1
+ 000013DB  0F A2		        cpuid                          ; Get feature flags
+ 000013DD  48/ 8D 35		        lea     rsi, MAlignmentDispatchSSE2
+	   00000080 R
+ 000013E4  0F BA E1 09		        bt      ecx, 9                 ; Test bit for SupSSE3
+ 000013E8  73 07		        jnc     Q200
+ 000013EA  48/ 8D 35		        lea     rsi, MAlignmentDispatchSupSSE3
+	   00000100 R
+ 000013F1			Q200:   ; Insert appropriate table
+ 000013F1  49/ 8B F8		        mov     rdi, r8
+ 000013F4  B9 00000010		        mov     ecx, 16
+ 000013F9  F3/ 48/ A5		        rep     movsq
+ 000013FC  5F			        pop     rdi
+ 000013FD  5E			        pop     rsi
+ 000013FE  5A			        pop     rdx
+ 000013FF  59			        pop     rcx
+ 00001400  5B			        pop     rbx
+ 00001401  58			        pop     rax
+				        ; Jump according to the replaced table
+ 00001402  41/ FF 24 C0		        jmp     qword ptr [r8+rax*8]
+
+
+				; Data segment must be included in function namespace
+ 00000000			.data
+
+				; Jump tables for alignments 0 - 15:
+				; The CPU dispatcher replaces MAlignmentDispatch with 
+				; MAlignmentDispatchSSE2 or MAlignmentDispatchSupSSE3 if Suppl-SSE3 
+				; is supported.
+
+ 00000000			MAlignmentDispatch label qword
+ 00000000  00000000000013D0 R	DQ Q100, Q100, Q100, Q100, Q100, Q100, Q100, Q100
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+ 00000040  00000000000013D0 R	DQ Q100, Q100, Q100, Q100, Q100, Q100, Q100, Q100
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+	   00000000000013D0 R
+
+				; Code pointer for each alignment for SSE2 instruction set
+ 00000080			MAlignmentDispatchSSE2 label qword
+ 00000080  0000000000000150 R	DQ C100, D101, D102, D103, D104, D105, D106, D107
+	   00000000000001D6 R
+	   0000000000000247 R
+	   00000000000002B8 R
+	   0000000000000329 R
+	   000000000000038B R
+	   0000000000000400 R
+	   0000000000000471 R
+ 000000C0  00000000000004E2 R	DQ D108, D109, D10A, D10B, D10C, D10D, D10E, D10F
+	   0000000000000540 R
+	   00000000000005B1 R
+	   0000000000000622 R
+	   0000000000000693 R
+	   00000000000006F2 R
+	   0000000000000763 R
+	   00000000000007D4 R
+
+				; Code pointer for each alignment for Suppl-SSE3 instruction set
+ 00000100			MAlignmentDispatchSupSSE3 label qword
+ 00000100  0000000000000150 R	DQ C100, E101, E102, E103, E104, E105, E106, E107
+	   0000000000000850 R
+	   00000000000008A1 R
+	   00000000000008F2 R
+	   0000000000000943 R
+	   00000000000009A0 R
+	   00000000000009F1 R
+	   0000000000000A42 R
+ 00000140  0000000000000A93 R	DQ E108, E109, E10A, E10B, E10C, E10D, E10E, E10F
+	   0000000000000AF0 R
+	   0000000000000B41 R
+	   0000000000000B92 R
+	   0000000000000BE3 R
+	   0000000000000C40 R
+	   0000000000000C91 R
+	   0000000000000CE2 R
+
+				; Code pointer for each alignment for non-temporal store
+ 00000180			MAlignmentDispatchNT label qword
+ 00000180  0000000000000D33 R	DQ F100, F101, F102, F103, F104, F105, F106, F107
+	   0000000000000D68 R
+	   0000000000000DD9 R
+	   0000000000000E4A R
+	   0000000000000EBB R
+	   0000000000000F1D R
+	   0000000000000F8E R
+	   0000000000000FFF R
+ 000001C0  0000000000001070 R	DQ F108, F109, F10A, F10B, F10C, F10D, F10E, F10F
+	   00000000000010CB R
+	   000000000000113C R
+	   00000000000011AD R
+	   000000000000121E R
+	   000000000000127D R
+	   00000000000012EE R
+	   000000000000135F R
+
+
+ 00001406			.code
+
+ 00001406			A_memmove ENDP                         ; End of function namespace
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+memmove64.asm						     Symbols 2 - 1
+
+
+
+
+Macros:
+
+                N a m e                 Type
+
+MOVE_REVERSE_UNALIGNED_SSE2_12 .	Proc
+MOVE_REVERSE_UNALIGNED_SSE2_4  .	Proc
+MOVE_REVERSE_UNALIGNED_SSE2_8  .	Proc
+MOVE_REVERSE_UNALIGNED_SSE2  . .	Proc
+MOVE_REVERSE_UNALIGNED_SSSE3 . .	Proc
+RETURNM  . . . . . . . . . . . .	Proc
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+A_memmove  . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 00001406 Public
+  A100 . . . . . . . . . . . . .	L 	 00000050 _TEXT	
+  A200 . . . . . . . . . . . . .	L 	 0000006D _TEXT	
+  A300 . . . . . . . . . . . . .	L 	 00000080 _TEXT	
+  A400 . . . . . . . . . . . . .	L 	 00000093 _TEXT	
+  A500 . . . . . . . . . . . . .	L 	 000000A6 _TEXT	
+  A900 . . . . . . . . . . . . .	L 	 000000B3 _TEXT	
+  B100 . . . . . . . . . . . . .	L 	 000000B7 _TEXT	
+  B200 . . . . . . . . . . . . .	L 	 000000D3 _TEXT	
+  B210 . . . . . . . . . . . . .	L 	 000000E5 _TEXT	
+  B220 . . . . . . . . . . . . .	L 	 000000F9 _TEXT	
+  B300 . . . . . . . . . . . . .	L 	 0000010B _TEXT	
+  B400 . . . . . . . . . . . . .	L 	 00000136 _TEXT	
+  C100 . . . . . . . . . . . . .	L 	 00000150 _TEXT	
+  C200 . . . . . . . . . . . . .	L 	 00000180 _TEXT	
+  C210 . . . . . . . . . . . . .	L 	 00000198 _TEXT	
+  C220 . . . . . . . . . . . . .	L 	 000001AC _TEXT	
+  C230 . . . . . . . . . . . . .	L 	 000001C0 _TEXT	
+  C500 . . . . . . . . . . . . .	L 	 000001D2 _TEXT	
+  D101 . . . . . . . . . . . . .	L 	 000001D6 _TEXT	
+  ??0000 . . . . . . . . . . . .	L 	 000001DB _TEXT	
+  ??0001 . . . . . . . . . . . .	L 	 0000023F _TEXT	
+  D102 . . . . . . . . . . . . .	L 	 00000247 _TEXT	
+  ??0002 . . . . . . . . . . . .	L 	 0000024C _TEXT	
+  ??0003 . . . . . . . . . . . .	L 	 000002B0 _TEXT	
+  D103 . . . . . . . . . . . . .	L 	 000002B8 _TEXT	
+  ??0004 . . . . . . . . . . . .	L 	 000002BD _TEXT	
+  ??0005 . . . . . . . . . . . .	L 	 00000321 _TEXT	
+  D104 . . . . . . . . . . . . .	L 	 00000329 _TEXT	
+  ??0006 . . . . . . . . . . . .	L 	 0000032E _TEXT	
+  ??0007 . . . . . . . . . . . .	L 	 00000383 _TEXT	
+  D105 . . . . . . . . . . . . .	L 	 0000038B _TEXT	
+  ??0008 . . . . . . . . . . . .	L 	 00000390 _TEXT	
+  ??0009 . . . . . . . . . . . .	L 	 000003F4 _TEXT	
+  D106 . . . . . . . . . . . . .	L 	 00000400 _TEXT	
+  ??000A . . . . . . . . . . . .	L 	 00000405 _TEXT	
+  ??000B . . . . . . . . . . . .	L 	 00000469 _TEXT	
+  D107 . . . . . . . . . . . . .	L 	 00000471 _TEXT	
+  ??000C . . . . . . . . . . . .	L 	 00000476 _TEXT	
+  ??000D . . . . . . . . . . . .	L 	 000004DA _TEXT	
+  D108 . . . . . . . . . . . . .	L 	 000004E2 _TEXT	
+  ??000E . . . . . . . . . . . .	L 	 000004EB _TEXT	
+  ??000F . . . . . . . . . . . .	L 	 00000535 _TEXT	
+  D109 . . . . . . . . . . . . .	L 	 00000540 _TEXT	
+  ??0010 . . . . . . . . . . . .	L 	 00000545 _TEXT	
+  ??0011 . . . . . . . . . . . .	L 	 000005A9 _TEXT	
+  D10A . . . . . . . . . . . . .	L 	 000005B1 _TEXT	
+  ??0012 . . . . . . . . . . . .	L 	 000005B6 _TEXT	
+  ??0013 . . . . . . . . . . . .	L 	 0000061A _TEXT	
+  D10B . . . . . . . . . . . . .	L 	 00000622 _TEXT	
+  ??0014 . . . . . . . . . . . .	L 	 00000627 _TEXT	
+  ??0015 . . . . . . . . . . . .	L 	 0000068B _TEXT	
+  D10C . . . . . . . . . . . . .	L 	 00000693 _TEXT	
+  ??0016 . . . . . . . . . . . .	L 	 0000069D _TEXT	
+  ??0017 . . . . . . . . . . . .	L 	 000006EA _TEXT	
+  D10D . . . . . . . . . . . . .	L 	 000006F2 _TEXT	
+  ??0018 . . . . . . . . . . . .	L 	 000006F7 _TEXT	
+  ??0019 . . . . . . . . . . . .	L 	 0000075B _TEXT	
+  D10E . . . . . . . . . . . . .	L 	 00000763 _TEXT	
+  ??001A . . . . . . . . . . . .	L 	 00000768 _TEXT	
+  ??001B . . . . . . . . . . . .	L 	 000007CC _TEXT	
+  D10F . . . . . . . . . . . . .	L 	 000007D4 _TEXT	
+  ??001C . . . . . . . . . . . .	L 	 000007D9 _TEXT	
+  ??001D . . . . . . . . . . . .	L 	 0000083D _TEXT	
+  E101 . . . . . . . . . . . . .	L 	 00000850 _TEXT	
+  ??001E . . . . . . . . . . . .	L 	 00000855 _TEXT	
+  ??001F . . . . . . . . . . . .	L 	 00000899 _TEXT	
+  E102 . . . . . . . . . . . . .	L 	 000008A1 _TEXT	
+  ??0020 . . . . . . . . . . . .	L 	 000008A6 _TEXT	
+  ??0021 . . . . . . . . . . . .	L 	 000008EA _TEXT	
+  E103 . . . . . . . . . . . . .	L 	 000008F2 _TEXT	
+  ??0022 . . . . . . . . . . . .	L 	 000008F7 _TEXT	
+  ??0023 . . . . . . . . . . . .	L 	 0000093B _TEXT	
+  E104 . . . . . . . . . . . . .	L 	 00000943 _TEXT	
+  ??0024 . . . . . . . . . . . .	L 	 00000948 _TEXT	
+  ??0025 . . . . . . . . . . . .	L 	 0000098C _TEXT	
+  E105 . . . . . . . . . . . . .	L 	 000009A0 _TEXT	
+  ??0026 . . . . . . . . . . . .	L 	 000009A5 _TEXT	
+  ??0027 . . . . . . . . . . . .	L 	 000009E9 _TEXT	
+  E106 . . . . . . . . . . . . .	L 	 000009F1 _TEXT	
+  ??0028 . . . . . . . . . . . .	L 	 000009F6 _TEXT	
+  ??0029 . . . . . . . . . . . .	L 	 00000A3A _TEXT	
+  E107 . . . . . . . . . . . . .	L 	 00000A42 _TEXT	
+  ??002A . . . . . . . . . . . .	L 	 00000A47 _TEXT	
+  ??002B . . . . . . . . . . . .	L 	 00000A8B _TEXT	
+  E108 . . . . . . . . . . . . .	L 	 00000A93 _TEXT	
+  ??002C . . . . . . . . . . . .	L 	 00000A98 _TEXT	
+  ??002D . . . . . . . . . . . .	L 	 00000ADC _TEXT	
+  E109 . . . . . . . . . . . . .	L 	 00000AF0 _TEXT	
+  ??002E . . . . . . . . . . . .	L 	 00000AF5 _TEXT	
+  ??002F . . . . . . . . . . . .	L 	 00000B39 _TEXT	
+  E10A . . . . . . . . . . . . .	L 	 00000B41 _TEXT	
+  ??0030 . . . . . . . . . . . .	L 	 00000B46 _TEXT	
+  ??0031 . . . . . . . . . . . .	L 	 00000B8A _TEXT	
+  E10B . . . . . . . . . . . . .	L 	 00000B92 _TEXT	
+  ??0032 . . . . . . . . . . . .	L 	 00000B97 _TEXT	
+  ??0033 . . . . . . . . . . . .	L 	 00000BDB _TEXT	
+  E10C . . . . . . . . . . . . .	L 	 00000BE3 _TEXT	
+  ??0034 . . . . . . . . . . . .	L 	 00000BE8 _TEXT	
+  ??0035 . . . . . . . . . . . .	L 	 00000C2C _TEXT	
+  E10D . . . . . . . . . . . . .	L 	 00000C40 _TEXT	
+  ??0036 . . . . . . . . . . . .	L 	 00000C45 _TEXT	
+  ??0037 . . . . . . . . . . . .	L 	 00000C89 _TEXT	
+  E10E . . . . . . . . . . . . .	L 	 00000C91 _TEXT	
+  ??0038 . . . . . . . . . . . .	L 	 00000C96 _TEXT	
+  ??0039 . . . . . . . . . . . .	L 	 00000CDA _TEXT	
+  E10F . . . . . . . . . . . . .	L 	 00000CE2 _TEXT	
+  ??003A . . . . . . . . . . . .	L 	 00000CE7 _TEXT	
+  ??003B . . . . . . . . . . . .	L 	 00000D2B _TEXT	
+  F100 . . . . . . . . . . . . .	L 	 00000D33 _TEXT	
+  F101 . . . . . . . . . . . . .	L 	 00000D68 _TEXT	
+  ??003C . . . . . . . . . . . .	L 	 00000D6D _TEXT	
+  ??003D . . . . . . . . . . . .	L 	 00000DD1 _TEXT	
+  F102 . . . . . . . . . . . . .	L 	 00000DD9 _TEXT	
+  ??003E . . . . . . . . . . . .	L 	 00000DDE _TEXT	
+  ??003F . . . . . . . . . . . .	L 	 00000E42 _TEXT	
+  F103 . . . . . . . . . . . . .	L 	 00000E4A _TEXT	
+  ??0040 . . . . . . . . . . . .	L 	 00000E4F _TEXT	
+  ??0041 . . . . . . . . . . . .	L 	 00000EB3 _TEXT	
+  F104 . . . . . . . . . . . . .	L 	 00000EBB _TEXT	
+  ??0042 . . . . . . . . . . . .	L 	 00000EC0 _TEXT	
+  ??0043 . . . . . . . . . . . .	L 	 00000F15 _TEXT	
+  F105 . . . . . . . . . . . . .	L 	 00000F1D _TEXT	
+  ??0044 . . . . . . . . . . . .	L 	 00000F22 _TEXT	
+  ??0045 . . . . . . . . . . . .	L 	 00000F86 _TEXT	
+  F106 . . . . . . . . . . . . .	L 	 00000F8E _TEXT	
+  ??0046 . . . . . . . . . . . .	L 	 00000F93 _TEXT	
+  ??0047 . . . . . . . . . . . .	L 	 00000FF7 _TEXT	
+  F107 . . . . . . . . . . . . .	L 	 00000FFF _TEXT	
+  ??0048 . . . . . . . . . . . .	L 	 00001004 _TEXT	
+  ??0049 . . . . . . . . . . . .	L 	 00001068 _TEXT	
+  F108 . . . . . . . . . . . . .	L 	 00001070 _TEXT	
+  ??004A . . . . . . . . . . . .	L 	 00001079 _TEXT	
+  ??004B . . . . . . . . . . . .	L 	 000010C3 _TEXT	
+  F109 . . . . . . . . . . . . .	L 	 000010CB _TEXT	
+  ??004C . . . . . . . . . . . .	L 	 000010D0 _TEXT	
+  ??004D . . . . . . . . . . . .	L 	 00001134 _TEXT	
+  F10A . . . . . . . . . . . . .	L 	 0000113C _TEXT	
+  ??004E . . . . . . . . . . . .	L 	 00001141 _TEXT	
+  ??004F . . . . . . . . . . . .	L 	 000011A5 _TEXT	
+  F10B . . . . . . . . . . . . .	L 	 000011AD _TEXT	
+  ??0050 . . . . . . . . . . . .	L 	 000011B2 _TEXT	
+  ??0051 . . . . . . . . . . . .	L 	 00001216 _TEXT	
+  F10C . . . . . . . . . . . . .	L 	 0000121E _TEXT	
+  ??0052 . . . . . . . . . . . .	L 	 00001228 _TEXT	
+  ??0053 . . . . . . . . . . . .	L 	 00001275 _TEXT	
+  F10D . . . . . . . . . . . . .	L 	 0000127D _TEXT	
+  ??0054 . . . . . . . . . . . .	L 	 00001282 _TEXT	
+  ??0055 . . . . . . . . . . . .	L 	 000012E6 _TEXT	
+  F10E . . . . . . . . . . . . .	L 	 000012EE _TEXT	
+  ??0056 . . . . . . . . . . . .	L 	 000012F3 _TEXT	
+  ??0057 . . . . . . . . . . . .	L 	 00001357 _TEXT	
+  F10F . . . . . . . . . . . . .	L 	 0000135F _TEXT	
+  ??0058 . . . . . . . . . . . .	L 	 00001364 _TEXT	
+  ??0059 . . . . . . . . . . . .	L 	 000013C8 _TEXT	
+  Q100 . . . . . . . . . . . . .	L 	 000013D0 _TEXT	
+  Q200 . . . . . . . . . . . . .	L 	 000013F1 _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+$memcpyEntry2  . . . . . . . . .	L 	 00000000 External
+?OVR_memmove . . . . . . . . . .	L 	 00000000 _TEXT	Public
+CacheBypassLimit . . . . . . . .	QWord	 00000000 External
+InstructionSet . . . . . . . . .	L 	 00000000 External
+MAlignmentDispatchNT . . . . . .	QWord	 00000180 _DATA	
+MAlignmentDispatchSSE2 . . . . .	QWord	 00000080 _DATA	
+MAlignmentDispatchSupSSE3  . . .	QWord	 00000100 _DATA	
+MAlignmentDispatch . . . . . . .	QWord	 00000000 _DATA	
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

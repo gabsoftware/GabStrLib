@@ -1,0 +1,107 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+strlen64.asm						     Page 1 - 1
+
+
+				;**************************  strlen64.asm  **********************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard strlen function:
+				; size_t strlen(const char * str);
+				; Finds the length of a zero-terminated string of bytes, optimized for speed.
+				;
+				; Overriding standard function strlen:
+				; The alias ?OVR_strlen is changed to _strlen in the object file if
+				; it is desired to override the standard library function strlen.
+				;
+				; Calling conventions: 
+				; Stack alignment is not required. No shadow space or red zone used.
+				; Called internally from strcpy and strcat without stack aligned.
+				;
+				; Optimization:
+				; Uses XMM registers to read 16 bytes at a time, aligned.
+				; Misaligned parts of the string are read from the nearest 16-bytes boundary
+				; and the irrelevant part masked out. It may read both before the begin of 
+				; the string and after the end, but will never load any unnecessary cache 
+				; line and never trigger a page fault for reading from non-existing memory 
+				; pages because it never reads past the nearest following 16-bytes boundary.
+				; It may, though, trigger any debug watch within the same 16-bytes boundary.
+				;
+				; The latest version of this file is available at:
+				; www.agner.org/optimize/asmexamples.zip
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+
+				public A_strlen                        ; Function A_strlen
+				public ?OVR_strlen                     ; ?OVR removed if standard function strlen overridden
+
+
+ 00000000			.code
+
+				; extern "C" int strlen (const char * s);
+
+				; 64-bit Windows version:
+ 00000000			A_strlen  PROC
+ 00000000			?OVR_strlen LABEL NEAR
+
+				IFDEF   WINDOWS
+				ELSE    ; Unix
+ 00000000  48/ 8B C7		        mov      rax,  rdi             ; get pointer to string from rdi
+ 00000003  8B CF		        mov      ecx,  edi             ; copy pointer (lower 32 bits)
+ = rdi				Rscopy  equ <rdi>                      ; Copy of s
+				ENDIF
+				        
+				        ; rax = s, ecx = 32 bits of s
+ 00000005  66| 0F EF C0		        pxor     xmm0, xmm0            ; set to zero
+ 00000009  83 E1 0F		        and      ecx,  0FH             ; lower 4 bits indicate misalignment
+ 0000000C  48/ 83 E0 F0		        and      rax,  -10H            ; align pointer by 16
+ 00000010  66| 0F 6F 08		        movdqa   xmm1, [rax]           ; read from nearest preceding boundary
+ 00000014  66| 0F 74 C8		        pcmpeqb  xmm1, xmm0            ; compare 16 bytes with zero
+ 00000018  66| 0F D7 D1		        pmovmskb edx,  xmm1            ; get one bit for each byte result
+ 0000001C  D3 EA		        shr      edx,  cl              ; shift out false bits
+ 0000001E  D3 E2		        shl      edx,  cl              ; shift back again
+ 00000020  0F BC D2		        bsf      edx,  edx             ; find first 1-bit
+ 00000023  75 15		        jnz      L2                    ; found
+				        
+				        ; Main loop, search 16 bytes at a time
+ 00000025  48/ 83 C0 10		L1:     add      rax,  10H             ; increment pointer by 16
+ 00000029  66| 0F 6F 08		        movdqa   xmm1, [rax]           ; read 16 bytes aligned
+ 0000002D  66| 0F 74 C8		        pcmpeqb  xmm1, xmm0            ; compare 16 bytes with zero
+ 00000031  66| 0F D7 D1		        pmovmskb edx,  xmm1            ; get one bit for each byte result
+ 00000035  0F BC D2		        bsf      edx,  edx             ; find first 1-bit
+ 00000038  74 EB		        jz       L1                    ; loop if not found
+				        
+ 0000003A			L2:     ; Zero-byte found. Compute string length        
+ 0000003A  48/ 2B C7		        sub      rax,  Rscopy          ; subtract start address
+ 0000003D  48/ 03 C2		        add      rax,  rdx             ; add byte index
+ 00000040  C3			        ret
+				        
+ 00000041			A_strlen ENDP
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+strlen64.asm						     Symbols 2 - 1
+
+
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+A_strlen . . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 00000041 Public
+  L1 . . . . . . . . . . . . . .	L 	 00000025 _TEXT	
+  L2 . . . . . . . . . . . . . .	L 	 0000003A _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_strlen  . . . . . . . . . .	L 	 00000000 _TEXT	Public
+Rscopy . . . . . . . . . . . . .	Text   	 rdi
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

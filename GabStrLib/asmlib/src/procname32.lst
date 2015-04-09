@@ -1,0 +1,242 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+procname32.asm						     Page 1 - 1
+
+
+				;                   procname32.asm                      © Agner Fog 2008-06-03
+				;
+				;
+				; ProcessorName
+				; =============
+				; This function produces a zero-terminated ASCII string containing a name
+				; for the microprocessor in human-readable format.
+				; 
+				; © 2003 - 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;
+				;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+				.686
+				.xmm
+				.model flat
+
+ 00000000			.data
+
+ 00000000  00000050 [		NameBuffer db 50H dup (0)              ; Static buffer to contain name
+	    00
+	   ]
+
+ 00000000			.code
+
+				IFDEF POSITIONINDEPENDENT
+				ENDIF  ; End IF POSITIONINDEPENDENT
+
+
+				; ********** ProcessorName function **********
+				; C++ prototype:
+				; extern "C" char * ProcessorName ();
+
+				; This function finds the name of the microprocessor. The name is returned
+				; in the parameter text, which must be a character array of at least 68 bytes.
+
+ 00000000			_ProcessorName PROC NEAR
+				PUBLIC _ProcessorName
+
+ 00000000  53			        push    ebx
+ 00000001  57			        push    edi
+				        
+				; Make edi point to NameBuffer:
+				        
+				IFDEF POSITIONINDEPENDENT
+				ELSE
+
+				; Normal code requiring base relocation:
+ 00000002  BF 00000000 R	        mov     edi, offset NameBuffer
+				        
+				ENDIF        
+				        
+				; detect if CPUID instruction supported by microprocessor:
+ 00000007  9C			        pushfd
+ 00000008  58			        pop     eax
+ 00000009  35 00200000		        xor     eax, 1 SHL 21          ; Check if CPUID bit can toggle
+ 0000000E  50			        push    eax
+ 0000000F  9D			        popfd
+ 00000010  9C			        pushfd
+ 00000011  5B			        pop     ebx
+ 00000012  33 C3		        xor     eax, ebx
+ 00000014  25 00200000		        and     eax, 1 SHL 21
+ 00000019  75 08		        jnz     NOID                   ; CPUID not supported
+ 0000001B  33 C0		        xor     eax, eax
+ 0000001D  0F A2		        cpuid                          ; Get number of CPUID functions
+ 0000001F  85 C0		        test    eax, eax
+ 00000021  75 20		        jnz     IDENTIFYABLE           ; Function 1 supported
+				        
+ 00000023			NOID:
+				        ; processor has no CPUID
+ 00000023  C7 07 38333038	        mov     DWORD PTR [edi], '8308'   ; Write text '80386 or 80486'
+ 00000029  C7 47 04		        mov     DWORD PTR [edi+4], 'ro 6'
+	   726F2036
+ 00000030  C7 47 08		        mov     DWORD PTR [edi+8], '408 '
+	   34303820
+ 00000037  C7 47 0C		        mov     DWORD PTR [edi+12], '68'  ; End with 0
+	   00003638
+ 0000003E  E9 000000C6		        jmp     PNEND
+				        
+ 00000043			IDENTIFYABLE:
+ 00000043  B8 80000000		        mov     eax, 80000000H
+ 00000048  0F A2		        cpuid
+ 0000004A  3D 80000004		        cmp     eax, 80000004H         ; Text if extended vendor string available
+ 0000004F  72 3A		        jb      no_ext_vendor_string
+
+				        ; Has extended vendor string
+ 00000051  B8 80000002		        mov     eax, 80000002H
+ 00000056  0F A2		        cpuid
+ 00000058  89 07		        mov     [edi], eax             ; Store 16 bytes of extended vendor string
+ 0000005A  89 5F 04		        mov     [edi+4], ebx
+ 0000005D  89 4F 08		        mov     [edi+8], ecx
+ 00000060  89 57 0C		        mov     [edi+0CH], edx
+ 00000063  B8 80000003		        mov     eax, 80000003H
+ 00000068  0F A2		        cpuid
+ 0000006A  89 47 10		        mov     [edi+10H], eax         ; Next 16 bytes
+ 0000006D  89 5F 14		        mov     [edi+14H], ebx
+ 00000070  89 4F 18		        mov     [edi+18H], ecx
+ 00000073  89 57 1C		        mov     [edi+1CH], edx
+ 00000076  B8 80000004		        mov     eax, 80000004H
+ 0000007B  0F A2		        cpuid
+ 0000007D  89 47 20		        mov     [edi+20H], eax         ; Next 16 bytes
+ 00000080  89 5F 24		        mov     [edi+24H], ebx
+ 00000083  89 4F 28		        mov     [edi+28H], ecx
+ 00000086  89 57 2C		        mov     [edi+2CH], edx
+ 00000089  EB 10		        jmp     get_family_and_model
+				        
+ 0000008B			no_ext_vendor_string:
+				        ; No extended vendor string. Get short vendor string
+ 0000008B  33 C0		        xor     eax, eax
+ 0000008D  0F A2		        cpuid
+ 0000008F  89 1F		        mov     [edi],ebx              ; Store short vendor string
+ 00000091  89 57 04		        mov     [edi+4],edx
+ 00000094  89 4F 08		        mov     [edi+8],ecx
+ 00000097  C6 47 0C 00		        mov     BYTE PTR [edi+12],0    ; Terminate string
+				        
+ 0000009B			get_family_and_model:
+ 0000009B  57			        push    edi                    ; Save string address
+ 0000009C  33 C0		        xor     eax, eax
+ 0000009E  B9 00000030		        mov     ecx, 30H
+ 000000A3  FC			        cld
+ 000000A4  F2/ AE		        repne   SCASB                  ; Find end of text
+ 000000A6  4F			        dec     edi
+ 000000A7  C7 07 6D614620	        mov     DWORD PTR [edi], 'maF '   ; Append text " Family "
+ 000000AD  C7 47 04		        mov     DWORD PTR [edi+4], ' yli'
+	   20796C69
+ 000000B4  83 C7 08		        add     edi, 8
+
+ 000000B7  B8 00000001		        mov     eax, 1
+ 000000BC  0F A2		        cpuid                          ; Get family and model
+ 000000BE  8B D8		        mov     ebx, eax
+ 000000C0  8B C8		        mov     ecx, eax
+ 000000C2  C1 E8 08		        shr     eax, 8
+ 000000C5  83 E0 0F		        and     eax, 0FH               ; Family
+ 000000C8  C1 E9 14		        shr     ecx, 20
+ 000000CB  81 E1 000000FF	        and     ecx, 0FFH              ; Extended family
+ 000000D1  03 C1		        add     eax, ecx               ; Family + extended family
+ 000000D3  E8 00000036		        call    WriteHex               ; Write as hexadecimal
+
+ 000000D8  C7 07 6F4D2048	        mov     DWORD PTR [edi], 'oM H' ; Write text "H Model "
+ 000000DE  C7 47 04		        mov     DWORD PTR [edi+4], ' led'
+	   206C6564
+ 000000E5  83 C7 08		        add     edi, 8
+				        
+ 000000E8  8B C3		        mov     eax, ebx
+ 000000EA  C1 E8 04		        shr     eax, 4
+ 000000ED  83 E0 0F		        and     eax, 0FH               ; Model
+ 000000F0  8B CB		        mov     ecx, ebx
+ 000000F2  C1 E9 0C		        shr     ecx, 12
+ 000000F5  81 E1 000000F0	        and     ecx, 0F0H              ; Extended model
+ 000000FB  0B C1		        or      eax, ecx               ; Model | extended model
+ 000000FD  E8 0000000C		        call    WriteHex               ; Write as hexadecimal
+
+ 00000102  C7 07 00000048	        mov     DWORD PTR [edi], 'H'   ; Write text "H"
+ 00000108  5F			        pop     edi                    ; Restore string address
+				        
+ 00000109			PNEND:  ; finished
+ 00000109  8B C7		        mov     eax, edi               ; Pointer to result
+ 0000010B  5F			        pop     edi
+ 0000010C  5B			        pop     ebx
+ 0000010D  C3			        ret
+ 0000010E			_ProcessorName ENDP
+
+ 0000010E			WriteHex LABEL NEAR                    ; Local function: Write 2 hexadecimal digits
+				        ; Parameters: AL = number to write, EDI = text destination
+ 0000010E  8B C8		        mov     ecx, eax
+ 00000110  C1 E9 04		        shr     ecx, 4
+ 00000113  83 E1 0F		        and     ecx, 0FH               ; most significant digit first
+ 00000116  83 F9 0A		        cmp     ecx, 10
+ 00000119  73 05		        jnb     W1
+				        ; 0 - 9
+ 0000011B  83 C1 30		        add     ecx, '0'
+ 0000011E  EB 03		        jmp     W2
+ 00000120			W1:     ; A - F
+ 00000120  83 C1 37		        add     ecx, 'A' - 10
+ 00000123  88 0F		W2:     mov     [edi], cl              ; write digit
+				                
+ 00000125  8B C8		        mov     ecx, eax
+ 00000127  83 E1 0F		        and     ecx, 0FH               ; next digit
+ 0000012A  83 F9 0A		        cmp     ecx, 10
+ 0000012D  73 05		        jnb     W3
+				        ; 0 - 9
+ 0000012F  83 C1 30		        add     ecx, '0'
+ 00000132  EB 03		        jmp     W4
+ 00000134			W3:     ; A - F
+ 00000134  83 C1 37		        add     ecx, 'A' - 10
+ 00000137  88 4F 01		W4:     mov     [edi+1], cl            ; write digit
+ 0000013A  83 C7 02		        add     edi, 2                 ; advance string pointer
+ 0000013D  C3			        ret
+				        
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+procname32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000050 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 0000013E Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_ProcessorName . . . . . . . . .	P Near	 00000000 _TEXT	Length= 0000010E Public
+  NOID . . . . . . . . . . . . .	L Near	 00000023 _TEXT	
+  IDENTIFYABLE . . . . . . . . .	L Near	 00000043 _TEXT	
+  no_ext_vendor_string . . . . .	L Near	 0000008B _TEXT	
+  get_family_and_model . . . . .	L Near	 0000009B _TEXT	
+  PNEND  . . . . . . . . . . . .	L Near	 00000109 _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+NameBuffer . . . . . . . . . . .	Byte	 00000000 _DATA	
+W1 . . . . . . . . . . . . . . .	L Near	 00000120 _TEXT	
+W2 . . . . . . . . . . . . . . .	L Near	 00000123 _TEXT	
+W3 . . . . . . . . . . . . . . .	L Near	 00000134 _TEXT	
+W4 . . . . . . . . . . . . . . .	L Near	 00000137 _TEXT	
+WriteHex . . . . . . . . . . . .	L Near	 0000010E _TEXT	
+
+	   0 Warnings
+	   0 Errors

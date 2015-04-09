@@ -1,0 +1,43 @@
+LIBRARY alibd64
+
+DESCRIPTION "Random number generator. (c) 2007 A. Fog"
+
+VERSION 2007.0808
+
+EXPORTS InstructionSet              @1
+        ProcessorName               @2
+        ReadTSC                     @3
+        Serialize                   @4
+        RoundF
+        RoundD
+        MersenneRandomInit
+        MersenneRandomInitByArray
+        MersenneRandom
+        MersenneIRandom
+        MersenneIRandomX
+        MersenneBRandom
+        MotherRandomInit
+        MotherRandom
+        MotherIRandom
+        MotherBRandom
+        MersenneRandomInitD         = MersenneRandomInit
+        MersenneRandomInitByArrayD  = MersenneRandomInitByArray
+        MersenneRandomD             = MersenneRandom
+        MersenneIRandomD            = MersenneIRandom
+        MersenneIRandomXD           = MersenneIRandomX
+        MersenneBRandomD            = MersenneBRandom
+        MotherRandomInitD           = MotherRandomInit
+        MotherRandomD               = MotherRandom
+        MotherIRandomD              = MotherIRandom
+        MotherBRandomD              = MotherBRandom
+        MersRandomInit
+        MersRandomInitByArray
+        MersRandom
+        MersIRandom
+        MersIRandomX
+        MersBRandom
+        MotRandomInit
+        MotRandom
+        MotIRandom
+        MotBRandom
+

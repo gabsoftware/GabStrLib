@@ -1,0 +1,96 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+strcat64.asm						     Page 1 - 1
+
+
+				;*************************  strcat64.asm  ************************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard strcat function:
+				; char * strcat(char *dest, const char * src);
+				; Copies zero-terminated string from src to end of dest.
+				;
+				; Overriding standard function strcat:
+				; The alias ?OVR_strcat is changed to _strcat in the object file if
+				; it is desired to override the standard library function strcat.
+				;
+				; Optimization:
+				; Uses optimized functions A_strlen and A_memcpy.
+				;
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+
+				public A_strcat                        ; Function A_strcat
+				public ?OVR_strcat                     ; ?OVR removed if standard function strcat overridden
+
+				; Imported from strlen64.asm
+				extern A_strlen:near
+
+				; Imported from memcpy64.asm
+				extern A_memcpy:near
+
+
+ 00000000			.code
+
+				; extern "C" char * A_strcat(char * dest, const char * src) {
+				;    memcpy(dest+strlen(dest), src, strlen(src)+1);
+				;    return dest
+				; }
+
+				; Function entry:
+ 00000000			A_strcat PROC
+ 00000000			?OVR_strcat LABEL NEAR
+
+				IFDEF   WINDOWS
+				ELSE    ; Unix
+ = rdi				Rpar1   equ <rdi>                      ; function parameter 1
+ = rsi				Rpar2   equ <rsi>                      ; function parameter 2
+ = rdx				Rpar3   equ <rdx>                      ; function parameter 3
+				ENDIF
+
+ 00000000  57			        push    Rpar1                  ; dest
+ 00000001  56			        push    Rpar2                  ; src
+ 00000002  E8 00000000 E	        call    A_strlen               ; length of dest
+ 00000007  50			        push    rax                    ; strlen(dest)
+ 00000008  48/ 8B 7C 24		        mov     Rpar1, [rsp+8]         ; src
+	   08
+ 0000000D  E8 00000000 E	        call    A_strlen               ; length of src
+ 00000012  5F			        pop     Rpar1                  ; strlen(dest)
+ 00000013  5E			        pop     Rpar2                  ; src
+ 00000014  48/ 03 3C 24		        add     Rpar1, [rsp]           ; dest + strlen(dest)
+ 00000018  48/ 8D 50 01		        lea     Rpar3, [rax+1]         ; strlen(src)+1
+ 0000001C  E8 00000000 E	        call    A_memcpy               ; copy
+ 00000021  58			        pop     rax                    ; return dest
+ 00000022  C3			        ret
+
+ 00000023			A_strcat ENDP
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+strcat64.asm						     Symbols 2 - 1
+
+
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+A_strcat . . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 00000023 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_strcat  . . . . . . . . . .	L 	 00000000 _TEXT	Public
+A_memcpy . . . . . . . . . . . .	L 	 00000000 External
+A_strlen . . . . . . . . . . . .	L 	 00000000 External
+Rpar1  . . . . . . . . . . . . .	Text   	 rdi
+Rpar2  . . . . . . . . . . . . .	Text   	 rsi
+Rpar3  . . . . . . . . . . . . .	Text   	 rdx
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

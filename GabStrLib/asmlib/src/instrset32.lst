@@ -1,0 +1,205 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+instrset32.asm						     Page 1 - 1
+
+
+				;                   instrset32.asm                      © Agner Fog 2007-06-14
+				;
+				; InstructionSet
+				; ==============
+				; This function returns an integer indicating which instruction set is
+				; supported by the microprocessor and operating system. A program can
+				; call this function to determine if a particular set of instructions can
+				; be used.
+				;
+				; The method used here for detecting whether XMM instructions are enabled by
+				; the operating system is different from the method recommended by Intel.
+				; The method used here has the advantage that it is independent of the 
+				; ability of the operating system to catch invalid opcode exceptions. The
+				; method used here has been thoroughly tested on many different versions of
+				; Intel and AMD microprocessors, and is believed to work reliably. For further
+				; discussion of this method, see my manual "Optimizing subroutines in assembly
+				; language", 2008. (www.agner.org/optimize/).
+				; 
+				; © 2003, 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;
+				;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+				;
+				; ********** InstructionSet function **********
+				; C++ prototype:
+				; extern "C" int InstructionSet (void);
+				;
+				; return value:
+				;  0 = use 80386 instruction set
+				;  1 or above = MMX instructions supported
+				;  2 or above = conditional move and FCOMI supported
+				;  3 or above = SSE (XMM) supported by processor and operating system
+				;  4 or above = SSE2 supported by processor and operating system
+				;  5 or above = SSE3 supported by processor and operating system
+				;  6 or above = Supplementary SSE3 supported by processor and operating system
+				;  8 or above = SSE4.1 supported by processor and operating system
+				; 10 or above = SSE4.2 supported by processor and operating system
+				;
+				;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+				.686
+				.xmm
+				.model flat
+
+ 00000000			.data
+ 00000000 FFFFFFFF		_IInstrSet dd    -1
+				public _IInstrSet
+
+ 00000000			.code
+
+				IFDEF POSITIONINDEPENDENT
+				ENDIF  ; End IF POSITIONINDEPENDENT
+
+
+
+ 00000000			_InstructionSet PROC NEAR
+				PUBLIC _InstructionSet                  ; extern "C" name
+
+				        
+				IFDEF POSITIONINDEPENDENT
+				ELSE
+ 00000000  A1 00000000 R	        mov     eax, [_IInstrSet]
+				ENDIF        
+				        ; Check if this function has been called before
+ 00000005  85 C0		        test    eax, eax
+ 00000007  78 01		        js      FirstTime              ; Negative means first time
+ 00000009  C3			        ret                            ; Early return. Has been called before
+
+ 0000000A			FirstTime:                             ; Function has not been called before
+ 0000000A  53			        push    ebx
+
+				IFNDEF  POSITIONINDEPENDENT
+ 0000000B  BA 00000000 R	        mov     edx, offset _IInstrSet ; make edx point to _IInstrSet
+				ENDIF
+ 00000010  52			        push    edx                    ; save address of _IInstrSet
+				        
+				        ; detect if CPUID instruction supported by microprocessor:
+ 00000011  9C			        pushfd
+ 00000012  58			        pop     eax
+ 00000013  0F BA F8 15		        btc     eax, 21                ; check if CPUID bit can toggle
+ 00000017  50			        push    eax
+ 00000018  9D			        popfd
+ 00000019  9C			        pushfd
+ 0000001A  5B			        pop     ebx
+ 0000001B  33 D8		        xor     ebx, eax
+ 0000001D  33 C0		        xor     eax, eax               ; 0
+ 0000001F  0F BA E3 15		        bt      ebx, 21
+ 00000023  0F 82 000000CA	        jc      ISEND                  ; CPUID not supported
+ 00000029  0F A2		        cpuid                          ; get number of CPUID functions
+ 0000002B  85 C0		        test    eax, eax
+ 0000002D  0F 84 000000C0	        jz      ISEND                  ; function 1 not supported
+ 00000033  B8 00000001		        mov     eax, 1
+ 00000038  0F A2		        cpuid                          ; get features
+ 0000003A  33 C0		        xor     eax, eax               ; 0
+ 0000003C  F7 C2 00000001	        test    edx, 1                 ; floating point support
+ 00000042  0F 84 000000AB	        jz      ISEND
+ 00000048  0F BA E2 17		        bt      edx, 23                ; MMX support        
+ 0000004C  0F 83 000000A1	        jnc     ISEND
+ 00000052  40			        inc     eax                    ; 1
+ 00000053  0F BA E2 0F		        bt      edx, 15                ; conditional move support
+ 00000057  0F 83 00000096	        jnc     ISEND
+ 0000005D  40			        inc     eax                    ; 2
+ 0000005E  0F BA E2 18		        bt      edx, 24                ; FXSAVE support by microprocessor
+ 00000062  0F 83 0000008B	        jnc     ISEND
+ 00000068  0F BA E2 19		        bt      edx, 25                ; SSE support by microprocessor
+ 0000006C  0F 83 00000081	        jnc     ISEND
+ 00000072  40			        inc     eax                    ; 3
+ 00000073  0F BA E2 1A		        bt      edx, 26                ; SSE2 support by microprocessor
+ 00000077  73 27		        jnc     OSXMM
+ 00000079  40			        inc     eax                    ; 4
+ 0000007A  F7 C1 00000001	        test    ecx, 1                 ; SSE3 support by microprocessor
+ 00000080  74 1E		        jz      OSXMM
+ 00000082  40			        inc     eax                    ; 5        
+ 00000083  0F BA E1 09		        bt      ecx, 9                 ; Suppl-SSE3 support by microprocessor
+ 00000087  73 17		        jnc     OSXMM
+ 00000089  40			        inc     eax                    ; 6
+ 0000008A  0F BA E1 13		        bt      ecx, 19                ; SSE4.1 support by microprocessor
+ 0000008E  73 10		        jnc     OSXMM
+ 00000090  B8 00000008		        mov     eax, 8                 ; 8
+ 00000095  0F BA E1 14		        bt      ecx, 20                ; SSE4.2 support by microprocessor
+ 00000099  73 05		        jnc     OSXMM
+ 0000009B  B8 0000000A		        mov     eax, 10                ; 10
+				        
+ 000000A0			OSXMM:  ; test if operating system supports XMM registers:
+ 000000A0  8B DC		        mov     ebx, esp               ; save stack pointer
+ 000000A2  81 EC 00000200	        sub     esp, 200H              ; allocate space for FXSAVE
+ 000000A8  83 E4 F0		        and     esp, -10H              ; align by 16
+ = D95A34BE			TESTDATA = 0D95A34BEH                  ; random test value
+ = 0000010C			TESTPS   = 10CH                        ; position to write TESTDATA = upper part of XMM6 image
+ 000000AB  0F AE 04 24		        fxsave  [esp]                  ; save FP/MMX and XMM registers
+ 000000AF  8B 8C 24		        mov     ecx,[esp+TESTPS]       ; read part of XMM6 register
+	   0000010C
+ 000000B6  81 B4 24		        xor     DWORD PTR [esp+TESTPS],TESTDATA  ; change value
+	   0000010C
+	   D95A34BE
+ 000000C1  0F AE 0C 24		        fxrstor [esp]                  ; load changed value into XMM6
+ 000000C5  89 8C 24		        mov     [esp+TESTPS],ecx       ; restore old value in buffer
+	   0000010C
+ 000000CC  0F AE 04 24		        fxsave  [esp]                  ; save again
+ 000000D0  8B 94 24		        mov     edx,[esp+TESTPS]       ; read changed XMM6 register
+	   0000010C
+ 000000D7  89 8C 24		        mov     [esp+TESTPS],ecx       ; restore old value
+	   0000010C
+ 000000DE  0F AE 0C 24		        fxrstor [esp]                  ; load old value into XMM6
+ 000000E2  33 CA		        xor     ecx, edx               ; get difference between old and new value
+ 000000E4  8B E3		        mov     esp, ebx               ; restore stack pointer
+ 000000E6  81 F9 D95A34BE	        cmp     ecx, TESTDATA          ; test if XMM6 was changed correctly
+ 000000EC  74 05		        je      ISEND                  ; test successful
+ 000000EE  B8 00000002		        mov     eax, 2                 ; test failed. XMM not supported by operating system
+				        
+ 000000F3  5A			ISEND:  pop     edx                    ; address of _IInstrSet
+ 000000F4  89 02		        mov     [edx], eax             ; save value in public variable _IInstrSet
+ 000000F6  5B			        pop     ebx
+ 000000F7  C3			        ret                            ; return value is in eax
+
+ 000000F8			_InstructionSet ENDP
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+instrset32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000004 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 000000F8 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_InstructionSet  . . . . . . . .	P Near	 00000000 _TEXT	Length= 000000F8 Public
+  FirstTime  . . . . . . . . . .	L Near	 0000000A _TEXT	
+  OSXMM  . . . . . . . . . . . .	L Near	 000000A0 _TEXT	
+  ISEND  . . . . . . . . . . . .	L Near	 000000F3 _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+TESTDATA . . . . . . . . . . . .	Number	 D95A34BEh   
+TESTPS . . . . . . . . . . . . .	Number	 0000010Ch   
+_IInstrSet . . . . . . . . . . .	DWord	 00000000 _DATA	Public
+
+	   0 Warnings
+	   0 Errors

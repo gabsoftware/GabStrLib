@@ -1,0 +1,91 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+strcpy64.asm						     Page 1 - 1
+
+
+				;*************************  strcpy64.asm  ************************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard strcpy function:
+				; char * A_strcpy(char * dest, const char * src);
+				; Copies zero-terminated string from src to dest, including terminating zero.
+				;
+				; Overriding standard function memcpy:
+				; The alias ?OVR_strcpy is changed to _strcpy in the object file if
+				; it is desired to override the standard library function strcpy.
+				;
+				; Optimization:
+				; Uses optimized functions A_strlen and A_memcpy. These functions allow
+				; calling without proper stack alignment.
+				;
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+
+				public A_strcpy                        ; Function A_strcpy
+				public ?OVR_strcpy                     ; ?OVR removed if standard function memcpy overridden
+
+				; Imported from strlen64.asm
+				extern A_strlen:near
+
+				; Imported from memcpy64.asm
+				extern A_memcpy:near
+
+
+ 00000000			.code
+
+				; extern "C" char * A_strcpy(char * dest, const char * src) {
+				;    return memcpy(dest, src, strlen(src)+1);
+				; }
+
+				; Function entry:
+ 00000000			A_strcpy PROC
+ 00000000			?OVR_strcpy LABEL NEAR
+
+				IFDEF   WINDOWS
+				ELSE    ; Unix
+ = rdi				Rpar1   equ <rdi>                      ; function parameter 1
+ = rsi				Rpar2   equ <rsi>                      ; function parameter 2
+ = rdx				Rpar3   equ <rdx>                      ; function parameter 3
+				ENDIF
+
+ 00000000  57			        push    Rpar1                  ; dest
+ 00000001  56			        push    Rpar2                  ; src
+ 00000002  48/ 8B FE		        mov     Rpar1, Rpar2
+				        ; (A_strlen does not require stack alignment)
+ 00000005  E8 00000000 E	        call    A_strlen               ; length of src
+ 0000000A  48/ 8D 50 01		        lea     Rpar3,[rax+1]          ; include terminating zero in length
+ 0000000E  5E			        pop     Rpar2                  ; src
+ 0000000F  5F			        pop     Rpar1                  ; dest
+ 00000010  E9 00000000 E	        jmp     A_memcpy               ; copy and return
+
+ 00000015			A_strcpy ENDP
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+strcpy64.asm						     Symbols 2 - 1
+
+
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+A_strcpy . . . . . . . . . . . .	P 	 00000000 _TEXT	Length= 00000015 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_strcpy  . . . . . . . . . .	L 	 00000000 _TEXT	Public
+A_memcpy . . . . . . . . . . . .	L 	 00000000 External
+A_strlen . . . . . . . . . . . .	L 	 00000000 External
+Rpar1  . . . . . . . . . . . . .	Text   	 rdi
+Rpar2  . . . . . . . . . . . . .	Text   	 rsi
+Rpar3  . . . . . . . . . . . . .	Text   	 rdx
+UNIX . . . . . . . . . . . . . .	Text   	 
+
+	   0 Warnings
+	   0 Errors

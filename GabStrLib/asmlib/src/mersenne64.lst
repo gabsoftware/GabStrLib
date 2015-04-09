@@ -1,0 +1,866 @@
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+mersenne64.asm						     Page 1 - 1
+
+
+				; ----------------------------- MERSENNE64.ASM ---------------------------
+				;  Random Number generator 'Mersenne Twister' type MT11213A (or MT19937)
+				;  AgF 2007-08-06
+				;
+				;  This random number generator is described in the article by
+				;  M. Matsumoto & T. Nishimura, in:
+				;  ACM Transactions on Modeling and Computer Simulation,
+				;  vol. 8, no. 1, 1998, pp. 3-30. See also:
+				;  http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/emt.html
+				;
+				;  Initialization:
+				;  MersRandomInit must be called before the first call to any of the other
+				;  random number functions. The seed is any 32-bit integer.
+				;  You may use MersRandomInitByArray instead if you want more
+				;  than 32 bits for seed. length is the number of integers in seeds[].
+				;  length must be > 0, there is no upper limit for length.
+				;
+				;  Generating random numbers:
+				;  MersRandom returns a floating point number in the interval 0 <= x < 1 with
+				;  a resolution of 32 bits.
+				;  MersIRandom returns an integer in the interval defined by min and max with
+				;  a resolution of 32 bits.
+				;  MersIRandomX returns an integer in the interval defined by min and max with
+				;  exactly equal probabilities of all values in the interval.
+				;  MersBRandom returns 32 random bits.
+				;
+				;  Error conditions:
+				;  If MersRandomInit or MersRandomInitByArray has not been called then MersRandom
+				;  and MersBRandom keep returning 0, and MersIRandom and MersIRandomX return min.
+				;  MersIRandom and MersIRandomX return a large negative number if max < min.
+				;
+				;  C++ prototypes in randoma.h:
+				;  Thread-safe versions:
+				;  extern "C" void   MersRandomInit(void * Pthis, int seed);         // Re-seed
+				;  extern "C" void   MersRandomInitByArray(void * Pthis, unsigned int seeds[], int length); // Seed by more than 32 bits
+				;  extern "C" int    MersIRandom (void * Pthis, int min, int max);   // Output random integer
+				;  extern "C" int    MersIRandomX(void * Pthis, int min, int max);   // Output random integer, exact
+				;  extern "C" double MersRandom(void * Pthis);                       // Output random float
+				;  extern "C" unsigned int MersBRandom(void * Pthis);                // Output random bits
+				;
+				;  Single-threaded versions:
+				;  extern "C" void   MersenneRandomInit(int seed);                   // Re-seed
+				;  extern "C" void   MersenneRandomInitByArray(unsigned int seeds[], int length); // Seed by more than 32 bits
+				;  extern "C" int    MersenneIRandom (int min, int max);             // Output random integer
+				;  extern "C" int    MersenneIRandomX(int min, int max);             // Output random integer, exact
+				;  extern "C" double MersenneRandom();                               // Output random float
+				;  extern "C" unsigned int MersenneBRandom();                        // Output random bits
+				;
+				;  © 1998 - 2008 Agner Fog. 
+				;  See asmlib-instructions.pdf for license conditions
+				; ----------------------------------------------------------------------
+
+				; structure definition and constants:
+				INCLUDE randomah.asi
+			      C ; ----------------------------- RANDOMAH.ASI ---------------------------
+			      C ;
+			      C ;  Assembly include file containing
+			      C ;  structure/class definitions for random number generators
+			      C ;
+			      C ;  © 2001, 2007 Agner Fog.
+			      C ;  GNU General Public License www.gnu.org/copyleft/gpl.html
+			      C ; ----------------------------------------------------------------------
+			      C 
+			      C ; Definitions for Mersenne Twister:
+			      C 
+ = 00000001		      C TEMPERING EQU 1              ; set to 0 if no tempering (improves speed by 25%)
+			      C 
+			      C IF 0
+			      C ELSE
+			      C ; or constants for MT19937:
+ = 00000270		      C MERS_N    = 624
+ = 0000018D		      C MERS_M    = 397
+ = 0000001F		      C MERS_R    = 31
+ = 9908B0DF		      C MERS_A    = 09908B0DFH
+ = 0000000B		      C MERS_U    = 11
+ = 00000007		      C MERS_S    = 7
+ = 0000000F		      C MERS_T    = 15
+ = 00000012		      C MERS_L    = 18
+ = 9D2C5680		      C MERS_B    = 9D2C5680H
+ = EFC60000		      C MERS_C    = 0EFC60000H
+			      C 
+			      C ENDIF
+			      C 
+ = 7FFFFFFF		      C LOWER_MASK = (1 SHL MERS_R) - 1             ; lower MERS_R bits
+ = 80000000		      C UPPER_MASK = -1 SHL MERS_R                  ; upper 32-MERS_R bits
+			      C 
+			      C ; Define class CRandomMersenneA member data
+			      C ; Must be aligned by 16.
+			      C 
+ 00000A70		      C CRandomMersenneA STRUC
+ 00000000  00000000	      C PreInt  DD      ?, ?, ?, ?             ; premade tempered integer numbers, ready to use
+	   00000000
+	   00000000
+	   00000000
+ 00000010  0000000000000000   C PreFlt  DQ      ?, ?, ?, ?             ; premade floating point numbers, ready to use (subtract 1.0)
+	   0000000000000000
+	   0000000000000000
+	   0000000000000000
+ 00000030  0000000000000000   C         DQ      ?                      ; last PreFlt unaligned overrun if MERS_N mod 4 = 1
+ 00000038  0000000000000000   C TmpFlt  DQ      ?                      ; temporary storage of floating point random number
+ 00000040  00000000	      C PreInx  DD      ?                      ; index to next PreInt and PreFlt number
+ 00000044  00000000	      C Instset DD      ?                      ; Instruction set
+ 00000048  00000000	      C LastInterval DD ?                      ; Last interval length for IRandomX
+ 0000004C  00000000	      C RLimit  DD      ?                      ; Rejection limit used by IRandomX
+ 00000050  00000004 [	      C TMB     DD      4 dup (?)              ; 4 copies of MERS_B constant
+	    00000000
+	   ]
+ 0DAC005C  00000004 [	      C TMC     DD      4 dup (?)              ; 4 copies of MERS_C constant
+	    00000000
+	   ]
+ 1B580068  00000002 [	      C one     DQ      2 dup (?)              ; 2 copies of 1.0 constant
+	    0000000000000000
+	   ]
+ 36B00080  00000000	      C MTI     DD      ?                      ; index into MT buffer
+ 36B00084  00000000	      C UMASK   DD      ?                      ; UPPER_MASK
+ 36B00088  00000000	      C LMASK   DD      ?                      ; LOWER_MASK             ; constants
+ 36B0008C  00000000	      C MATA    DD      ?                      ; MERS_A
+ 36B00090  00000004 [	      C wrap1   DD      4  dup (?)             ; MT buffer km wraparound
+	    00000000
+	   ]
+ 445C009C  00000270 [	      C MT      DD      MERS_N  dup (?)        ; MT history buffer (aligned by 16)
+	    00000000
+	   ]
+ 520800A8  00000004 [	      C wrap2   DD      4  dup (?)             ; MT buffer kk wraparound
+	    00000000
+	   ]
+			      C IF MERS_N AND 3
+			      C ENDIF        
+			      C CRandomMersenneA ENDS
+			      C 
+			      C 
+			      C ; Definitions for Mother-of-all generator:
+			      C 
+			      C ; Define class CRandomMotherA member data
+			      C ; Must be aligned by 16. Preferably aligned by 64 to fit a cache line
+ 00000040		      C CRandomMotherA STRUC
+ 00000000  0000000000000000   C one     DQ      ?                      ; 1.0
+ 00000008  00000000	      C Instset DD      ?                      ; Instruction set
+ 0000000C  00000000	      C M4      DD      ?                      ; x[n-4]
+ 00000010  00000000	      C M3      DD      ?                      ; x[n-3] (aligned)
+ 00000014  00000000	      C M2      DD      ?                      ; x[n-2]
+ 00000018  00000000	      C M1      DD      ?                      ; x[n-1]
+ 0000001C  00000000	      C M0      DD      ?                      ; x[n]
+ 00000020  00000000	      C MC      DD      ?                      ; Carry (aligned)
+ 00000024  00000000	      C zero    DD      ?                      ; Zero-extension of carry
+ 00000028  0000000000000000   C RanP1   DQ      ?                      ; Double random number in interval [1,2)
+ 00000030  00000000	      C MF3     DD      ?                      ; 2111111111 (aligned)
+ 00000034  00000000	      C MF2     DD      ?                      ; 1492
+ 00000038  00000000	      C MF1     DD      ?                      ; 1776
+ 0000003C  00000000	      C MF0     DD      ?                      ; 5115
+			      C CRandomMotherA ENDS
+			      C 
+
+ 00000000			.DATA    ; data segment
+				align 16
+
+				; Data for single instance of random number generator
+ 00000000 00000000		MersenneInstance CRandomMersenneA <>
+	   00000000
+	   00000000
+	   00000000
+	   0000000000000000
+	   0000000000000000
+	   0000000000000000
+	   0000000000000000
+	   0000000000000000
+	   0000000000000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+	   00000004 [
+	    00000000
+	   ]
+	   00000004 [
+	    00000000
+	   ]
+	   00000002 [
+	    0000000000000000
+	   ] 00000000
+	   00000000
+	   00000000
+	   00000000
+	   00000004 [
+	    00000000
+	   ]
+	   00000270 [
+	    00000000
+	   ]
+	   00000004 [
+	    00000000
+	   ]
+
+ 00000000			.CODE
+
+ 00000000			MersenneRandomInit PROC
+				IFDEF UNIX
+ 00000000  8B D7		        mov     edx, edi                    ; seed
+ 00000002  48/ 8D 0D		        lea     rcx, MersenneInstance       ; Pthis = point to instance
+	   00000000 R
+ 00000009  EB 05		        jmp     ?Windows_MersRandomInit
+				ENDIF
+				IFDEF WINDOWS
+				ENDIF
+ 0000000B			MersenneRandomInit ENDP
+
+				        
+				; Thread-safe version:
+				;  extern "C" void MersRandomInit(void * Pthis, int seed); // Re-seed
+ 0000000B			MersRandomInit   PROC
+				IFDEF UNIX
+				        ; translate calling convention
+ 0000000B  8B D6		        mov     edx, esi                    ; seed
+ 0000000D  48/ 8B CF		        mov     rcx, rdi                    ; Pthis
+				ENDIF
+				        ; parameters: rcx = Pthis, edx = seed
+ 00000010			        ?Windows_MersRandomInit LABEL NEAR
+ 00000010  E8 00000021		        call    Mers_init0                  ; initialize mt buffer with seeds
+				        
+				        ; Number of premade numbers that are lost in the initialization when the  
+				        ; SSE2 implementation makes up to 4 premade numbers at a time:
+				IF MERS_N and 3        
+				ELSE
+ = 00000004			   PREMADELOST = 4
+				ENDIF
+				        ; We want the C++ and the assembly implementation to give exactly the same
+				        ; sequence. The C++ version discards 37 random numbers after initialization.
+				        ; The assembly version generates a sequence that is PREMADELOST + 1 numbers
+				        ; behind. Therefore we discard the first 37 + PREMADELOST + 1 numbers if
+				        ; SSE2 is supported, otherwise 37 + 1.
+				        
+ 00000015  53			        push    rbx
+ 00000016  BB 0000002A		        mov     ebx, 37+PREMADELOST+1
+ 0000001B  83 79 44 04		        CMP     [rcx].CRandomMersenneA.Instset, 4          ; can we use XMM registers and SSE2 ?
+ 0000001F  73 0A		        jae     M110
+ 00000021  83 EB 04		        sub     ebx, PREMADELOST       ; SSE2 not supported
+ 00000024  C7 41 40		        mov     [rcx].CRandomMersenneA.PreInx, 0           ; reset index to premade list
+	   00000000
+ 0000002B			M110:   ; loop
+ 0000002B  E8 000001B8		M120:   call    ?Windows_MersBRandom
+ 00000030  FF CB		        dec     ebx
+ 00000032  75 F7		        jnz     M120
+ 00000034  5B			        pop     rbx
+ 00000035  C3			        ret
+ 00000036			MersRandomInit ENDP
+				        
+
+ 00000036			Mers_init0   PROC                           ; make random seeds from eax and put them into MT buffer
+				; Input parameters: 
+				; rcx points to CRandomMersenneA
+				; edx: seed
+				; rcx unchanged by procedure
+
+ 00000036  57			        push    rdi
+				        ; clear my buffer
+ 00000037  51			        push    rcx
+ 00000038  48/ 8B F9		        mov     rdi, rcx                    ; Pthis
+ 0000003B  B9 0000029C		        mov     ecx, (type CRandomMersenneA) / 4
+ 00000040  33 C0		        xor     eax, eax
+ 00000042  FC			        cld
+ 00000043  F3/ AB		        rep     stosd
+ 00000045  59			        pop     rcx                         ; Pthis
+ 00000046  8B FA		        mov     edi, edx                    ; seed
+				        
+				        ; initialize CRandomMersenneA structure
+ 00000048  C7 41 40		        mov     [rcx].CRandomMersenneA.PreInx, 4*4
+	   00000010
+ 0000004F  C7 41 44		        mov     [rcx].CRandomMersenneA.Instset, 4
+	   00000004
+ 00000056  B8 9D2C5680		        mov     eax, MERS_B
+ 0000005B  89 41 50		        mov     [rcx].CRandomMersenneA.TMB, eax
+ 0000005E  89 41 54		        mov     [rcx].CRandomMersenneA.TMB+4, eax
+ 00000061  89 41 58		        mov     [rcx].CRandomMersenneA.TMB+8, eax
+ 00000064  89 41 5C		        mov     [rcx].CRandomMersenneA.TMB+12, eax
+ 00000067  B8 EFC60000		        mov     eax, MERS_C
+ 0000006C  89 41 60		        mov     [rcx].CRandomMersenneA.TMC, eax
+ 0000006F  89 41 64		        mov     [rcx].CRandomMersenneA.TMC+4, eax
+ 00000072  89 41 68		        mov     [rcx].CRandomMersenneA.TMC+8, eax
+ 00000075  89 41 6C		        mov     [rcx].CRandomMersenneA.TMC+12, eax
+ 00000078  B8 3FF00000		        mov     eax, 3FF00000H              ; upper dword of 1.0, double precision
+ 0000007D  89 41 74		        mov     dword ptr [rcx].CRandomMersenneA.one+4, eax
+ 00000080  89 41 7C		        mov     dword ptr [rcx].CRandomMersenneA.one+12, eax        
+ 00000083  C7 81 00000088	        mov     [rcx].CRandomMersenneA.LMASK, LOWER_MASK
+	   7FFFFFFF
+ 0000008D  C7 81 00000084	        mov     [rcx].CRandomMersenneA.UMASK, UPPER_MASK
+	   80000000
+ 00000097  C7 81 0000008C	        mov     [rcx].CRandomMersenneA.MATA,  MERS_A
+	   9908B0DF
+
+				        ; put random numbers into MT buffer
+ 000000A1  33 C0		        xor     eax, eax
+ 000000A3  89 BC 81		M210:   mov     [rcx+rax*4].CRandomMersenneA.MT, edi
+	   000000A0
+ 000000AA  8B D7		        mov     edx, edi
+ 000000AC  C1 EF 1E		        shr     edi, 30
+ 000000AF  33 FA		        xor     edi, edx
+ 000000B1  69 FF 6C078965	        imul    edi, 1812433253D
+ 000000B7  FF C0		        inc     eax
+ 000000B9  03 F8		        add     edi, eax
+ 000000BB  3D 00000270		        cmp     eax, MERS_N
+ 000000C0  72 E1		        jb      M210
+				        
+				        ; Set index MTI to end of list, (scaled by 4)
+				        ; Round up to multiple of 4 to avoid alignment error
+ 000000C2  C7 81 00000080	        mov     [rcx].CRandomMersenneA.MTI, ((MERS_N+3) and -4) * 4
+	   000009C0
+				        
+ 000000CC  5F			        pop     rdi
+ 000000CD  C3			        ret      
+ 000000CE			Mers_init0   ENDP
+
+
+				; Single threaded version:
+				; extern "C" void MersenneRandomInitByArray(unsigned int seeds[], int length);
+
+ 000000CE			MersenneRandomInitByArray PROC       ; entry for Linux call
+				IFDEF UNIX
+ 000000CE  44/ 8B C6		        mov     r8d, esi                    ; length
+ 000000D1  48/ 8B D7		        mov     rdx, rdi                    ; seeds
+ 000000D4  48/ 8D 0D		        lea     rcx, MersenneInstance       ; Pthis = point to instance
+	   00000000 R
+ 000000DB  EB 09		        jmp     ?Windows_MersRandomInitByArray
+				ENDIF
+				IFDEF WINDOWS
+				ENDIF        
+ 000000DD			MersenneRandomInitByArray ENDP       
+
+				; Thread-safe version:
+				; extern "C" int MersRandomInitByArray(void * Pthis, unsigned int seeds[], int length);
+ 000000DD			MersRandomInitByArray PROC
+				IFDEF UNIX
+				        ; translate calling convention
+ 000000DD  44/ 8B C2		        mov     r8d, edx                    ; length
+ 000000E0  48/ 8B D6		        mov     rdx, rsi                    ; seeds
+ 000000E3  48/ 8B CF		        mov     rcx, rdi                    ; Pthis
+				ENDIF
+				        
+ 000000E6			?Windows_MersRandomInitByArray LABEL NEAR
+				; parameters: rcx = Pthis, rdx = seeds, r8d = length
+
+ 000000E6  53			        push    rbx
+ 000000E7  56			        push    rsi
+ 000000E8  57			        push    rdi
+ 000000E9  55			        push    rbp
+ 000000EA  48/ 8B DA		        mov     rbx, rdx                    ; seeds
+ 000000ED  41/ 8B E8		        mov     ebp, r8d                    ; length
+				        
+ 000000F0  BA 012BD6AA		        mov     edx, 19650218
+ 000000F5  E8 FFFFFF3C		        call    Mers_init0                  ; init0(19650218); (rcx unchanged)
+				        
+ 000000FA  44/ 8B C5		        mov     r8d, ebp                    ; r8d = length, ebp = k
+ 000000FD  85 ED		        test    ebp, ebp
+ 000000FF  0F 8E 000000B3	        jle     M380                        ; error: length <= 0
+ 00000105  33 FF		        xor     edi, edi                    ; j = 0
+ 00000107  8D 77 01		        lea     esi, [rdi+1]                ; i = 1
+ 0000010A  81 FD 00000270	        cmp     ebp, MERS_N
+ 00000110  77 05		        ja      M310
+ 00000112  BD 00000270		        mov     ebp, MERS_N                 ; k = max (MERS_N,length)
+ 00000117			M310:
+
+				        ; for (; k; k--) {
+ 00000117  8B 84 B1		M320:   mov     eax, [rcx+rsi*4-4].CRandomMersenneA.MT     ; mt[i-1]
+	   0000009C
+ 0000011E  8B D0		        mov     edx, eax
+ 00000120  C1 E8 1E		        shr     eax, 30
+ 00000123  33 C2		        xor     eax, edx                                   ; mt[i-1] ^ (mt[i-1] >> 30)
+ 00000125  69 C0 0019660D	        imul    eax, 1664525                               ; * 1664525
+ 0000012B  33 84 B1		        xor     eax, [rcx+rsi*4].CRandomMersenneA.MT       ; ^ mt[i]
+	   000000A0
+ 00000132  03 04 BB		        add     eax, [rbx+rdi*4]                           ; + seeds[j]
+ 00000135  03 C7		        add     eax, edi                                   ; + j
+ 00000137  89 84 B1		        mov     [rcx+rsi*4].CRandomMersenneA.MT, eax       ; save in mt[i]
+	   000000A0
+ 0000013E  FF C6		        inc     esi                                        ; i++
+ 00000140  FF C7		        inc     edi                                        ; j++
+ 00000142  81 FE 00000270	        cmp     esi, MERS_N
+ 00000148  72 11		        jb      M330                                       ; if (i>=MERS_N)
+ 0000014A  8B 81 00000A5C	        mov     eax, [rcx+(MERS_N-1)*4].CRandomMersenneA.MT; mt[0] = mt[MERS_N-1];
+ 00000150  89 81 000000A0	        mov     [rcx].CRandomMersenneA.MT, eax
+ 00000156  BE 00000001		        mov     esi, 1                                     ; i=1;
+ 0000015B			M330:
+ 0000015B  41/ 3B F8		        cmp     edi, r8d                                   ; length
+ 0000015E  72 02		        jb      M340                                       ; if (j>=length)
+ 00000160  33 FF		        xor     edi, edi                                   ; j = 0;
+ 00000162			M340:
+ 00000162  FF CD		        dec     ebp                                        ; k--
+ 00000164  75 B1		        jnz     M320                                       ; first k loop
+ 00000166			M350:
+ 00000166  BD 0000026F		        mov     ebp, MERS_N-1                              ; k
+ 0000016B  8B 84 B1		M360:   mov     eax, [rcx+rsi*4-4].CRandomMersenneA.MT     ; mt[i-1]
+	   0000009C
+ 00000172  8B D0		        mov     edx, eax
+ 00000174  C1 E8 1E		        shr     eax, 30
+ 00000177  33 C2		        xor     eax, edx                                   ; mt[i-1] ^ (mt[i-1] >> 30)
+ 00000179  69 C0 5D588B65	        imul    eax, 1566083941                            ; * 1566083941
+ 0000017F  33 84 B1		        xor     eax, [rcx+rsi*4].CRandomMersenneA.MT       ; ^ mt[i]
+	   000000A0
+ 00000186  2B C6		        sub     eax, esi                                   ; - i
+ 00000188  89 84 B1		        mov     [rcx+rsi*4].CRandomMersenneA.MT, eax       ; save in mt[i]
+	   000000A0
+ 0000018F  FF C6		        inc     esi                                        ; i++
+ 00000191  81 FE 00000270	        cmp     esi, MERS_N
+ 00000197  72 11		        jb      M370                                       ; if (i>=MERS_N)
+ 00000199  8B 81 00000A5C	        mov     eax, [rcx+(MERS_N-1)*4].CRandomMersenneA.MT; mt[0] = mt[MERS_N-1];
+ 0000019F  89 81 000000A0	        mov     [rcx].CRandomMersenneA.MT, eax
+ 000001A5  BE 00000001		        mov     esi, 1                                     ; i=1;
+ 000001AA			M370:
+ 000001AA  FF CD		        dec     ebp                                        ; k--
+ 000001AC  75 BD		        jnz     M360                                       ; second k loop
+ 000001AE  C7 81 000000A0	        mov     [rcx].CRandomMersenneA.MT, 80000000H       ; mt[0] = 0x80000000
+	   80000000
+ 000001B8			M380:
+ 000001B8  C7 81 00000080	        mov     [rcx].CRandomMersenneA.MTI, 0
+	   00000000
+ 000001C2  C7 41 40		        mov     [rcx].CRandomMersenneA.PreInx, 0
+	   00000000
+
+				; discard first MERS_N random numbers + PREMADELOST+1 to compensate for lag
+ 000001C9  BF 00000275		        mov     edi, MERS_N + PREMADELOST+1
+ 000001CE  E8 00000015		M391:   call    ?Windows_MersBRandom
+ 000001D3  FF CF		        dec     edi
+ 000001D5  75 F7		        jnz     M391
+
+ 000001D7  5D			        pop     rbp                                        ; restore registers
+ 000001D8  5F			        pop     rdi
+ 000001D9  5E			        pop     rsi
+ 000001DA  5B			        pop     rbx
+ 000001DB  C3			        ret
+ 000001DC			MersRandomInitByArray ENDP
+
+
+				; Single threaded version:
+				; extern "C" unsigned int MersenneBRandom(); // Output random bits
+
+ 000001DC			MersenneBRandom PROC                                       ; entry for both Windows and Linux call
+				IFDEF WINDOWS
+				ENDIF
+ 000001DC  48/ 8D 0D		        lea     rcx, MersenneInstance                      ; Point to instance
+	   00000000 R
+ 000001E3  EB 03		        jmp     ?Windows_MersBRandom
+ 000001E5			MersenneBRandom ENDP       
+
+				; Thread-safe version:
+				; extern "C" unsigned int MersBRandom(void * Pthis);       // Output random bits
+
+ 000001E5			MersBRandom PROC
+				IFDEF UNIX
+ 000001E5  48/ 8B CF		        mov     rcx, rdi                                   ; translate calling convention
+				ENDIF
+
+ 000001E8			?Windows_MersBRandom LABEL NEAR                            ; Label used internally
+ 000001E8  8B 51 40		        mov     edx, [rcx].CRandomMersenneA.PreInx         ; index into premade numbers
+ 000001EB  8B 04 11		        mov     eax, [rcx+rdx*1].CRandomMersenneA.PreInt   ; fetch premade random number
+ 000001EE  83 C2 04		        add     edx, 4
+ 000001F1  89 51 40		        mov     [rcx].CRandomMersenneA.PreInx, edx
+ 000001F4  83 FA 10		        cmp     edx, 4*4
+ 000001F7  73 01		        jnb     M410
+ 000001F9  C3			        ret                                                ; return premade number
+
+ 000001FA			M410    LABEL   NEAR
+				; PREMADE list is empty. Make 4 more numbers ready for next call:
+ 000001FA  8B 91 00000080	        mov     edx, [rcx].CRandomMersenneA.MTI            ; fetch 4 numbers from MT buffer
+ 00000200  66| 0F 6F 84 11	        movdqa  xmm0, xmmword ptr [rcx+rdx*1].CRandomMersenneA.MT
+	   000000A0
+				        
+				IF TEMPERING                                               ; optional tempering algorithm
+ 00000209  66| 0F 6F C8		        movdqa  xmm1, xmm0
+ 0000020D  66| 0F 72 D0		        psrld   xmm0, MERS_U
+	   0B
+ 00000212  66| 0F EF C1		        pxor    xmm0, xmm1
+ 00000216  66| 0F 6F C8		        movdqa  xmm1, xmm0        
+ 0000021A  66| 0F 72 F0		        pslld   xmm0, MERS_S
+	   07
+ 0000021F  66| 0F DB 41		        pand    xmm0, xmmword ptr [rcx].CRandomMersenneA.TMB
+	   50
+ 00000224  66| 0F EF C1		        pxor    xmm0, xmm1
+ 00000228  66| 0F 6F C8		        movdqa  xmm1, xmm0        
+ 0000022C  66| 0F 72 F0		        pslld   xmm0, MERS_T
+	   0F
+ 00000231  66| 0F DB 41		        pand    xmm0, xmmword ptr [rcx].CRandomMersenneA.TMC
+	   60
+ 00000236  66| 0F EF C1		        pxor    xmm0, xmm1
+ 0000023A  66| 0F 6F C8		        movdqa  xmm1, xmm0        
+ 0000023E  66| 0F 72 D0		        psrld   xmm0, MERS_L
+	   12
+ 00000243  66| 0F EF C1		        pxor    xmm0, xmm1
+				ENDIF   ; tempering
+
+				        ; save four premade integers
+ 00000247  66| 0F 7F 01		        movdqa  xmmword ptr [rcx].CRandomMersenneA.PreInt, xmm0
+				        ; premake four floating point numbers
+ 0000024B  66| 0F EF C9		        pxor    xmm1, xmm1
+ 0000024F  66| 0F EF D2		        pxor    xmm2, xmm2
+ 00000253  66| 0F 62 C8		        punpckldq xmm1, xmm0                               ; get first two numbers into bits 32-63 and 96-127
+ 00000257  66| 0F 6A D0		        punpckhdq xmm2, xmm0                               ; get next  two numbers into bits 32-63 and 96-127
+ 0000025B  66| 0F 73 D1		        psrlq   xmm1, 12                                   ; get bits into mantissa position
+	   0C
+ 00000260  66| 0F 73 D2		        psrlq   xmm2, 12                                   ; get bits into mantissa position
+	   0C
+ 00000265  66| 0F EB 49		        por     xmm1,xmmword ptr[rcx].CRandomMersenneA.one ; set exponent for interval [1,2)
+	   70
+ 0000026A  66| 0F EB 51		        por     xmm2,xmmword ptr[rcx].CRandomMersenneA.one ; set exponent for interval [1,2)
+	   70
+ 0000026F  66| 0F 7F 49		        movdqa  xmmword ptr [rcx].CRandomMersenneA.PreFlt, xmm1     ; store two premade numbers
+	   10
+ 00000274  66| 0F 7F 51		        movdqa  xmmword ptr [rcx].CRandomMersenneA.PreFlt+16, xmm2  ; store two more premade numbers        
+	   20
+ 00000279  C7 41 40		        mov     [rcx].CRandomMersenneA.PreInx, 0           ; index to premade numbers 
+	   00000000
+ 00000280  83 C2 10		        add     edx, 4*4                                   ; increment MTI index into MT buffer by 4
+ 00000283  89 91 00000080	        mov     [rcx].CRandomMersenneA.MTI, edx
+ 00000289  81 FA 000009C0	        cmp     edx, MERS_N*4
+ 0000028F  73 01		        jae     M420
+ 00000291  C3			        ret                                                ; return random number in eax
+
+				; MT buffer exhausted. Make MERS_N new numbers ready for next time
+ 00000292			M420:                                                      ; eax is the random number to return
+				IF      MERS_N AND 3                                       ; if MERS_N is not divisible by 4
+				ENDIF
+				        
+				; MT buffer is empty. Fill it up
+ 00000292  53			        push    rbx
+ 00000293  66| 0F 6E 99		        movd    xmm3, [rcx].CRandomMersenneA.UMASK         ; load constants
+	   00000084
+ 0000029B  66| 0F 6E A1		        movd    xmm4, [rcx].CRandomMersenneA.LMASK
+	   00000088
+ 000002A3  66| 0F 6E A9		        movd    xmm5, [rcx].CRandomMersenneA.MATA
+	   0000008C
+ 000002AB  66| 0F 70 DB		        pshufd  xmm3, xmm3, 0                              ; broadcast constants
+	   00
+ 000002B0  66| 0F 70 E4		        pshufd  xmm4, xmm4, 0
+	   00
+ 000002B5  66| 0F 70 ED		        pshufd  xmm5, xmm5, 0
+	   00
+ 000002BA  48/ 33 DB		        xor     rbx,  rbx                                  ; kk = 0
+ 000002BD  BA 00000634		        mov     edx,  MERS_M*4                             ; km
+				        
+				; change rcx from pointing to CRandomMersenneA to pointing to CRandomMersenneA.MT
+ 000002C2  48/ 81 C1		        add     rcx, CRandomMersenneA.MT
+	   000000A0
+
+ 000002C9			M430:   ; kk loop
+ 000002C9  66| 0F 6F 14 0B	        movdqa  xmm2, [rcx+rbx]                            ; mt[kk]
+ 000002CE  66| 0F 6E 44 0B	        movd    xmm0, dword ptr [rcx+rbx+16]
+	   10
+ 000002D4  66| 0F 6F 0C 0B	        movdqa  xmm1, [rcx+rbx]                            ; mt[kk]        
+ 000002D9  F3/ 0F 10 D0		        movss   xmm2, xmm0                                 ; faster than movdqu xmm2,[]
+ 000002DD  66| 0F 70 D2		        pshufd  xmm2, xmm2, 00111001B                      ; mt[kk+1]
+	   39
+ 000002E2  F3/ 0F 7E 04 0A	        movq    xmm0, qword ptr [rcx+rdx]                  ; mt[km]
+ 000002E7  0F 16 44 0A 08	        movhps  xmm0, qword ptr [rcx+rdx+8]                ; faster than movdqu xmm0,[]
+ 000002EC  66| 0F DB CB		        pand    xmm1, xmm3                                 ; mt[kk] & UPPER_MASK
+ 000002F0  66| 0F DB D4		        pand    xmm2, xmm4                                 ; mt[kk+1] & LOWER_MASK
+ 000002F4  66| 0F EB CA		        por     xmm1, xmm2                                 ; y        
+ 000002F8  66| 0F 6F D1		        movdqa  xmm2, xmm1                                 ; y
+ 000002FC  66| 0F 72 F1		        pslld   xmm1, 31                                   ; copy bit 0 into all bits
+	   1F
+ 00000301  66| 0F 72 E1		        psrad   xmm1, 31                                   ; -(y & 1)
+	   1F
+ 00000306  66| 0F DB CD		        pand    xmm1, xmm5                                 ; & MERS_A
+ 0000030A  66| 0F 72 D2		        psrld   xmm2, 1                                    ; y >> 1
+	   01
+ 0000030F  66| 0F EF C1		        pxor    xmm0, xmm1
+ 00000313  66| 0F EF C2		        pxor    xmm0, xmm2
+ 00000317  66| 0F 7F 04 0B	        movdqa  [rcx+rbx], xmm0                            ; result into mt[kk]
+ 0000031C  81 FB 000009B0	        cmp     ebx, (MERS_N-4)*4
+ 00000322  73 34		        jae     M440                                       ; exit loop when kk past end of buffer
+ 00000324  83 C3 10		        add     ebx, 16                                    ; kk += 4
+ 00000327  48/ 83 C2 10		        add     rdx, 16                                    ; km += 4 (signed)
+ 0000032B  81 FA 000009B0	        cmp     edx, (MERS_N-4)*4
+ 00000331  76 96		        jbe     M430                                       ; skip unless km wraparound
+ 00000333  48/ 81 EA		        sub     rdx, MERS_N*4                              ; km wraparound (signed)
+	   000009C0
+ 0000033A  F3/ 0F 6F 81		        movdqu  xmm0, [rcx]+(MERS_N-4)*4                   ; copy end to before begin for km wraparound
+	   000009B0
+ 00000342  66| 0F 7F 41		        movdqa  [rcx]-4*4, xmm0        
+	   F0
+ 00000347  66| 0F 6F 01		        movdqa  xmm0, [rcx]                                ; copy begin to after end for kk wraparound
+ 0000034B  F3/ 0F 7F 81		        movdqu  [rcx]+MERS_N*4, xmm0
+	   000009C0
+ 00000353  E9 FFFFFF71		        jmp     M430
+
+ 00000358			M440:   ; loop finished. discard excess part of last result
+
+				; change ecx back to pointing to CRandomMersenneA
+ 00000358  48/ 81 E9		        sub     rcx, CRandomMersenneA.MT        
+	   000000A0
+
+ 0000035F  C7 81 00000080	        mov     [rcx].CRandomMersenneA.MTI, 0
+	   00000000
+ 00000369  5B			        pop     rbx
+ 0000036A  C3			        ret                                                ; random number is still in eax
+				        
+ 0000036B			MersBRandom ENDP
+
+
+				; Single threaded version:
+				; extern "C" unsigned int MersenneRandom();  // Get floating point random number
+
+ 0000036B			MersenneRandom PROC                                        ; entry for both Windows and Linux call
+				IFDEF WINDOWS
+				ENDIF
+				IFDEF UNIX
+ 0000036B  48/ 8D 3D		        lea     rdi, MersenneInstance                      ; Point to instance
+	   00000000 R
+				        ; continue in next function
+				ENDIF
+
+				; Thread-safe version:
+				; extern "C" double MersRandom(void * Pthis);  // Get floating point random number
+ 00000372			MersRandom LABEL NEAR
+				public MersRandom
+				IFDEF UNIX
+ 00000372  48/ 8B CF		        mov     rcx, rdi                                   ; translate calling convention
+				ENDIF
+ 00000375  8B 51 40		        mov     edx, [rcx].CRandomMersenneA.PreInx         ; index into premade numbers
+ 00000378  F2/ 0F 10 44 51	        movsd   xmm0, [rcx+rdx*2].CRandomMersenneA.PreFlt  ; fetch premade floating point random number
+	   10
+ 0000037E  F2/ 0F 5C 41		        subsd   xmm0, [rcx].CRandomMersenneA.one           ; subtract 1.0
+	   70
+ 00000383  F2/ 0F 11 41		        movsd   [rcx].CRandomMersenneA.TmpFlt, xmm0        ; store random number
+	   38
+ 00000388  E8 FFFFFE5B		        call    ?Windows_MersBRandom                       ; prepare next random number
+ 0000038D  F2/ 0F 10 41		        movsd   xmm0, [rcx].CRandomMersenneA.TmpFlt        ; recall random number
+	   38
+ 00000392  C3			        ret        
+ 00000393			MersenneRandom ENDP       
+
+
+
+				; Single threaded version:
+				; extern "C" unsigned int MersenneIRandom(int min, int max); // Get integer random number in desired interval
+
+ 00000393			MersenneIRandom PROC 
+				IFDEF UNIX
+ 00000393  56			        push    rsi                                        ; max
+ 00000394  57			        push    rdi                                        ; min
+ 00000395  48/ 8D 0D		        lea     rcx, MersenneInstance                      ; Pthis = point to instance
+	   00000000 R
+ 0000039C  EB 0B		        jmp     MersIRandom_max_min_on_stack
+				ENDIF
+				IFDEF WINDOWS
+				ENDIF
+ 0000039E			MersenneIRandom ENDP       
+
+				; Thread-safe version:
+				; extern "C" int MersIRandom(void * Pthis, int min, int max); // Get integer random number in desired interval
+ 0000039E			MersIRandom PROC
+				IFDEF UNIX
+				        ; translate calling convention
+ 0000039E  44/ 8B C2		        mov     r8d, edx                                   ; max
+ 000003A1  8B D6		        mov     edx, esi                                   ; min
+ 000003A3  48/ 8B CF		        mov     rcx, rdi                                   ; Pthis
+				ENDIF
+ 000003A6  41/ 50		        push    r8                                         ; max
+ 000003A8  52			        push    rdx                                        ; min
+ 000003A9			MersIRandom_max_min_on_stack label near
+				        
+ 000003A9  E8 FFFFFE3A		        call    ?Windows_MersBRandom                       ; random bits
+ 000003AE  59			        pop     rcx                                        ; min
+ 000003AF  5A			        pop     rdx                                        ; max
+ 000003B0  2B D1		        sub     edx, ecx
+ 000003B2  78 09		        js      short M720                                 ; max < min
+ 000003B4  83 C2 01		        add     edx, 1                                     ; interval = max - min + 1
+ 000003B7  F7 E2		        mul     edx                                        ; multiply random number by interval and truncate
+ 000003B9  8D 04 11		        lea     eax, [rdx+rcx]                             ; add min
+ 000003BC  C3			        ret
+ 000003BD  B8 80000000		M720:   mov     eax, 80000000H                             ; error exit
+ 000003C2  C3			        ret
+ 000003C3			MersIRandom ENDP
+
+
+				; Single threaded version:
+				; extern "C" unsigned int MersenneIRandomX(int min, int max); // Get integer random number in desired interval
+
+ 000003C3			MersenneIRandomX PROC
+				IFDEF UNIX
+ 000003C3  44/ 8B C6		        mov     r8d, esi                                   ; max
+ 000003C6  8B D7		        mov     edx, edi                                   ; min
+ 000003C8  48/ 8D 0D		        lea     rcx, MersenneInstance                      ; Pthis = point to instance
+	   00000000 R
+ 000003CF  EB 08		        jmp     ?Windows_MersIRandomX
+				ENDIF
+				IFDEF WINDOWS
+				ENDIF
+ 000003D1			MersenneIRandomX ENDP       
+
+				; Thread-safe version:
+				; extern "C" int MersIRandomX(void * Pthis, int min, int max); // Get integer random number in desired interval
+ 000003D1			MersIRandomX PROC
+				IFDEF UNIX
+				        ; translate calling convention
+ 000003D1  44/ 8B C2		        mov     r8d, edx                                   ; max
+ 000003D4  8B D6		        mov     edx, esi                                   ; min
+ 000003D6  48/ 8B CF		        mov     rcx, rdi                                   ; Pthis
+				ENDIF
+				        
+ 000003D9			?Windows_MersIRandomX   LABEL NEAR 
+				; parameters: rcx = Pthis, edx = min, r8d = max
+
+ 000003D9  57			        push    rdi
+ 000003DA  41/ 8B F8		        mov     edi, r8d                                   ; max
+
+ 000003DD  2B FA		        sub     edi, edx                                   ; max - min
+ 000003DF  7E 2A		        jle     short M830                                 ; max <= min (signed)
+ 000003E1  FF C7		        inc     edi                                        ; interval = max - min + 1
+ 000003E3  52			        push    rdx                                        ; save min
+				        
+				        ; if (interval != LastInterval) {
+ 000003E4  3B 79 48		        cmp     edi, [rcx].CRandomMersenneA.LastInterval
+ 000003E7  74 11		        je      M810
+				        ; RLimit = uint32(((uint64)1 << 32) / interval) * interval - 1;}
+ 000003E9  33 C0		        xor     eax, eax                                   ; 0
+ 000003EB  8D 50 01		        lea     edx, [rax+1]                               ; 1
+ 000003EE  F7 F7		        div     edi                                        ; (would give overflow if interval = 1)
+ 000003F0  F7 E7		        mul     edi
+ 000003F2  FF C8		        dec     eax
+ 000003F4  89 41 4C		        mov     [rcx].CRandomMersenneA.RLimit, eax
+ 000003F7  89 79 48		        mov     [rcx].CRandomMersenneA.LastInterval, edi
+ 000003FA			M810:
+ 000003FA			M820:   ; do { // Rejection loop
+ 000003FA  E8 FFFFFDE9		        call    ?Windows_MersBRandom                       ; random bits (rcx is preserved)
+				        ; longran  = (uint64)BRandom() * interval;
+ 000003FF  F7 E7		        mul     edi
+				        ; } while (remainder > RLimit);
+ 00000401  3B 41 4C		        cmp     eax, [rcx].CRandomMersenneA.RLimit
+ 00000404  77 F4		        ja      M820
+				        
+				        ; return (int32)iran + min
+ 00000406  58			        pop     rax                                        ; min
+ 00000407  03 C2		        add     eax, edx
+ 00000409  5F			        pop     rdi
+ 0000040A  C3			        ret
+				        
+ 0000040B  7C 04		M830:   jl      M840
+				        ; max = min. Return min
+ 0000040D  8B C2		        mov     eax, edx
+ 0000040F  5F			        pop     rdi
+ 00000410  C3			        ret                                                ; max = min exit
+				        
+ 00000411			M840:   ; max < min: error
+ 00000411  B8 80000000		        mov     eax, 80000000H                             ; error exit
+ 00000416  5F			        pop     rdi
+ 00000417  C3			        ret
+ 00000418			MersIRandomX ENDP
+
+
+				END
+Microsoft (R) Macro Assembler (x64) Version 9.00.21022.08   08/06/09 23:31:20
+mersenne64.asm						     Symbols 2 - 1
+
+
+
+
+Structures and Unions:
+
+                N a m e                  Size
+                                         Offset      Type
+
+CRandomMersenneA . . . . . . . .	 00000A70
+  PreInt . . . . . . . . . . . .	 00000000	 DWord
+  PreFlt . . . . . . . . . . . .	 00000010	 QWord
+  TmpFlt . . . . . . . . . . . .	 00000038	 QWord
+  PreInx . . . . . . . . . . . .	 00000040	 DWord
+  Instset  . . . . . . . . . . .	 00000044	 DWord
+  LastInterval . . . . . . . . .	 00000048	 DWord
+  RLimit . . . . . . . . . . . .	 0000004C	 DWord
+  TMB  . . . . . . . . . . . . .	 00000050	 DWord
+  TMC  . . . . . . . . . . . . .	 00000060	 DWord
+  one  . . . . . . . . . . . . .	 00000070	 QWord
+  MTI  . . . . . . . . . . . . .	 00000080	 DWord
+  UMASK  . . . . . . . . . . . .	 00000084	 DWord
+  LMASK  . . . . . . . . . . . .	 00000088	 DWord
+  MATA . . . . . . . . . . . . .	 0000008C	 DWord
+  wrap1  . . . . . . . . . . . .	 00000090	 DWord
+  MT . . . . . . . . . . . . . .	 000000A0	 DWord
+  wrap2  . . . . . . . . . . . .	 00000A60	 DWord
+CRandomMotherA . . . . . . . . .	 00000040
+  one  . . . . . . . . . . . . .	 00000000	 QWord
+  Instset  . . . . . . . . . . .	 00000008	 DWord
+  M4 . . . . . . . . . . . . . .	 0000000C	 DWord
+  M3 . . . . . . . . . . . . . .	 00000010	 DWord
+  M2 . . . . . . . . . . . . . .	 00000014	 DWord
+  M1 . . . . . . . . . . . . . .	 00000018	 DWord
+  M0 . . . . . . . . . . . . . .	 0000001C	 DWord
+  MC . . . . . . . . . . . . . .	 00000020	 DWord
+  zero . . . . . . . . . . . . .	 00000024	 DWord
+  RanP1  . . . . . . . . . . . .	 00000028	 QWord
+  MF3  . . . . . . . . . . . . .	 00000030	 DWord
+  MF2  . . . . . . . . . . . . .	 00000034	 DWord
+  MF1  . . . . . . . . . . . . .	 00000038	 DWord
+  MF0  . . . . . . . . . . . . .	 0000003C	 DWord
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+MersBRandom  . . . . . . . . . .	P 	 000001E5 _TEXT	Length= 00000186 Public
+  M420 . . . . . . . . . . . . .	L 	 00000292 _TEXT	
+  M430 . . . . . . . . . . . . .	L 	 000002C9 _TEXT	
+  M440 . . . . . . . . . . . . .	L 	 00000358 _TEXT	
+MersIRandomX . . . . . . . . . .	P 	 000003D1 _TEXT	Length= 00000047 Public
+  M810 . . . . . . . . . . . . .	L 	 000003FA _TEXT	
+  M820 . . . . . . . . . . . . .	L 	 000003FA _TEXT	
+  M830 . . . . . . . . . . . . .	L 	 0000040B _TEXT	
+  M840 . . . . . . . . . . . . .	L 	 00000411 _TEXT	
+MersIRandom  . . . . . . . . . .	P 	 0000039E _TEXT	Length= 00000025 Public
+  M720 . . . . . . . . . . . . .	L 	 000003BD _TEXT	
+MersRandomInitByArray  . . . . .	P 	 000000DD _TEXT	Length= 000000FF Public
+  M310 . . . . . . . . . . . . .	L 	 00000117 _TEXT	
+  M320 . . . . . . . . . . . . .	L 	 00000117 _TEXT	
+  M330 . . . . . . . . . . . . .	L 	 0000015B _TEXT	
+  M340 . . . . . . . . . . . . .	L 	 00000162 _TEXT	
+  M350 . . . . . . . . . . . . .	L 	 00000166 _TEXT	
+  M360 . . . . . . . . . . . . .	L 	 0000016B _TEXT	
+  M370 . . . . . . . . . . . . .	L 	 000001AA _TEXT	
+  M380 . . . . . . . . . . . . .	L 	 000001B8 _TEXT	
+  M391 . . . . . . . . . . . . .	L 	 000001CE _TEXT	
+MersRandomInit . . . . . . . . .	P 	 0000000B _TEXT	Length= 0000002B Public
+  M110 . . . . . . . . . . . . .	L 	 0000002B _TEXT	
+  M120 . . . . . . . . . . . . .	L 	 0000002B _TEXT	
+Mers_init0 . . . . . . . . . . .	P 	 00000036 _TEXT	Length= 00000098 Public
+  M210 . . . . . . . . . . . . .	L 	 000000A3 _TEXT	
+MersenneBRandom  . . . . . . . .	P 	 000001DC _TEXT	Length= 00000009 Public
+MersenneIRandomX . . . . . . . .	P 	 000003C3 _TEXT	Length= 0000000E Public
+MersenneIRandom  . . . . . . . .	P 	 00000393 _TEXT	Length= 0000000B Public
+MersenneRandomInitByArray  . . .	P 	 000000CE _TEXT	Length= 0000000F Public
+MersenneRandomInit . . . . . . .	P 	 00000000 _TEXT	Length= 0000000B Public
+MersenneRandom . . . . . . . . .	P 	 0000036B _TEXT	Length= 00000028 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?Windows_MersBRandom . . . . . .	L 	 000001E8 _TEXT	
+?Windows_MersIRandomX  . . . . .	L 	 000003D9 _TEXT	
+?Windows_MersRandomInitByArray .	L 	 000000E6 _TEXT	
+?Windows_MersRandomInit  . . . .	L 	 00000010 _TEXT	
+LOWER_MASK . . . . . . . . . . .	Number	 7FFFFFFFh   
+M410 . . . . . . . . . . . . . .	L 	 000001FA _TEXT	
+MERS_A . . . . . . . . . . . . .	Number	 9908B0DFh   
+MERS_B . . . . . . . . . . . . .	Number	 9D2C5680h   
+MERS_C . . . . . . . . . . . . .	Number	 EFC60000h   
+MERS_L . . . . . . . . . . . . .	Number	 00000012h   
+MERS_M . . . . . . . . . . . . .	Number	 0000018Dh   
+MERS_N . . . . . . . . . . . . .	Number	 00000270h   
+MERS_R . . . . . . . . . . . . .	Number	 0000001Fh   
+MERS_S . . . . . . . . . . . . .	Number	 00000007h   
+MERS_T . . . . . . . . . . . . .	Number	 0000000Fh   
+MERS_U . . . . . . . . . . . . .	Number	 0000000Bh   
+MersIRandom_max_min_on_stack . .	L 	 000003A9 _TEXT	
+MersRandom . . . . . . . . . . .	L 	 00000372 _TEXT	Public
+MersenneInstance . . . . . . . .	CRandomMersenneA  00000000 _DATA	
+PREMADELOST  . . . . . . . . . .	Number	 00000004h   
+TEMPERING  . . . . . . . . . . .	Number	 00000001h   
+UNIX . . . . . . . . . . . . . .	Text   	 
+UPPER_MASK . . . . . . . . . . .	Number	 -80000000h   
+
+	   0 Warnings
+	   0 Errors

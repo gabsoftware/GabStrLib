@@ -1,0 +1,217 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+strlen32.asm						     Page 1 - 1
+
+
+				;**************************  strlen32.asm  **********************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard strlen function:
+				; size_t strlen(const char * str);
+				; Finds the length of a zero-terminated string of bytes, optimized for speed.
+				;
+				; Overriding standard function strlen:
+				; The alias ?OVR_strlen is changed to _strlen in the object file if
+				; it is desired to override the standard library function strlen.
+				;
+				; Position-independent code is generated if POSITIONINDEPENDENT is defined.
+				;
+				; Internal calls: The parameter on the stack is left unchanged for the sake
+				; of calls from strcpy and strcat.
+				;
+				; Optimization:
+				; Uses XMM registers to read 16 bytes at a time, aligned.
+				; Misaligned parts of the string are read from the nearest 16-bytes boundary
+				; and the irrelevant part masked out. It may read both before the begin of 
+				; the string and after the end, but will never load any unnecessary cache 
+				; line and never trigger a page fault for reading from non-existing memory 
+				; pages because it never reads past the nearest following 16-bytes boundary.
+				; It may, though, trigger any debug watch within the same 16-bytes boundary.
+				; CPU dispatching included for 386 and SSE2 instruction sets.
+				;
+				; The latest version of this file is available at:
+				; www.agner.org/optimize/asmexamples.zip
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+				.686
+				.xmm
+				.model flat
+
+				public _A_strlen                       ; Function _A_strlen
+				public ?OVR_strlen                     ; ?OVR removed if standard function strlen overridden
+
+				; Imported from instrset32.asm
+				extern _InstructionSet: near           ; Instruction set for CPU dispatcher
+
+
+				IFDEF  POSITIONINDEPENDENT
+				ENDIF
+
+
+ 00000000			.code
+
+				; extern "C" int strlen (const char * s);
+ 00000000			_A_strlen PROC  NEAR
+ 00000000			?OVR_strlen LABEL NEAR
+
+				IFNDEF  POSITIONINDEPENDENT
+ 00000000  FF 25 00000000 R	        jmp     [strlenDispatch]       ; Go to appropriate version, depending on instruction set
+
+				ELSE    ; Position-independent code
+				ENDIF
+
+				; SSE2 version
+ 00000006			strlenSSE2:
+ 00000006  8B 44 24 04		        mov      eax,  [esp+4]         ; get pointer to string
+ 0000000A  8B C8		        mov      ecx,  eax             ; copy pointer
+ 0000000C  66| 0F EF C0		        pxor     xmm0, xmm0            ; set to zero
+ 00000010  83 E1 0F		        and      ecx,  0FH             ; lower 4 bits indicate misalignment
+ 00000013  83 E0 F0		        and      eax,  -10H            ; align pointer by 16
+ 00000016  66| 0F 6F 08		        movdqa   xmm1, [eax]           ; read from nearest preceding boundary
+ 0000001A  66| 0F 74 C8		        pcmpeqb  xmm1, xmm0            ; compare 16 bytes with zero
+ 0000001E  66| 0F D7 D1		        pmovmskb edx,  xmm1            ; get one bit for each byte result
+ 00000022  D3 EA		        shr      edx,  cl              ; shift out false bits
+ 00000024  D3 E2		        shl      edx,  cl              ; shift back again
+ 00000026  0F BC D2		        bsf      edx,  edx             ; find first 1-bit
+ 00000029  75 14		        jnz      A200                  ; found
+				        
+				        ; Main loop, search 16 bytes at a time
+ 0000002B  83 C0 10		A100:   add      eax,  10H             ; increment pointer by 16
+ 0000002E  66| 0F 6F 08		        movdqa   xmm1, [eax]           ; read 16 bytes aligned
+ 00000032  66| 0F 74 C8		        pcmpeqb  xmm1, xmm0            ; compare 16 bytes with zero
+ 00000036  66| 0F D7 D1		        pmovmskb edx,  xmm1            ; get one bit for each byte result
+ 0000003A  0F BC D2		        bsf      edx,  edx             ; find first 1-bit
+ 0000003D  74 EC		        jz       A100                  ; loop if not found
+				        
+ 0000003F			A200:   ; Zero-byte found. Compute string length        
+ 0000003F  2B 44 24 04		        sub      eax,  [esp+4]         ; subtract start address
+ 00000043  03 C2		        add      eax,  edx             ; add byte index
+ 00000045  C3			        ret
+
+
+ 00000046			strlen386: ; 80386 version
+ 00000046  53			        push    ebx
+ 00000047  8B 4C 24 08		        mov     ecx, [esp+8]           ; get pointer to string
+ 0000004B  8B C1		        mov     eax, ecx               ; copy pointer
+ 0000004D  83 E1 03		        and     ecx, 3                 ; lower 2 bits of address, check alignment
+ 00000050  74 28		        jz      L2                     ; string is aligned by 4. Go to loop
+ 00000052  83 E0 FC		        and     eax, -4                ; align pointer by 4
+ 00000055  8B 18		        mov     ebx, [eax]             ; read from nearest preceding boundary
+ 00000057  C1 E1 03		        shl     ecx, 3                 ; mul by 8 = displacement in bits
+ 0000005A  BA FFFFFFFF		        mov     edx, -1
+ 0000005F  D3 E2		        shl     edx, cl                ; make byte mask
+ 00000061  F7 D2		        not     edx                    ; mask = 0FFH for false bytes
+ 00000063  0B DA		        or      ebx, edx               ; mask out false bytes
+
+				        ; check first four bytes for zero
+ 00000065  8D 8B FEFEFEFF	        lea     ecx, [ebx-01010101H]   ; subtract 1 from each byte
+ 0000006B  F7 D3		        not     ebx                    ; invert all bytes
+ 0000006D  23 CB		        and     ecx, ebx               ; and these two
+ 0000006F  81 E1 80808080	        and     ecx, 80808080H         ; test all sign bits
+ 00000075  75 17		        jnz     L3                     ; zero-byte found
+				        
+				        ; Main loop, read 4 bytes aligned
+ 00000077  83 C0 04		L1:     add     eax, 4                 ; increment pointer by 4
+ 0000007A  8B 18		L2:     mov     ebx, [eax]             ; read 4 bytes of string
+ 0000007C  8D 8B FEFEFEFF	        lea     ecx, [ebx-01010101H]   ; subtract 1 from each byte
+ 00000082  F7 D3		        not     ebx                    ; invert all bytes
+ 00000084  23 CB		        and     ecx, ebx               ; and these two
+ 00000086  81 E1 80808080	        and     ecx, 80808080H         ; test all sign bits
+ 0000008C  74 E9		        jz      L1                     ; no zero bytes, continue loop
+				        
+ 0000008E  0F BC C9		L3:     bsf     ecx, ecx               ; find right-most 1-bit
+ 00000091  C1 E9 03		        shr     ecx, 3                 ; divide by 8 = byte index
+ 00000094  2B 44 24 08		        sub     eax, [esp+8]           ; subtract start address
+ 00000098  03 C1		        add     eax, ecx               ; add index to byte
+ 0000009A  5B			        pop     ebx
+ 0000009B  C3			        ret
+				        
+				        
+				; CPU dispatching for strlen. This is executed only once
+ 0000009C			strlenCPUDispatch:
+				IFNDEF   POSITIONINDEPENDENT
+ 0000009C  60			        pushad
+ 0000009D  E8 00000000 E	        call    _InstructionSet
+				        ; Point to generic version of strlen
+ 000000A2  C7 05 00000000 R	        mov     [strlenDispatch], offset strlen386
+	   00000046 R
+ 000000AC  83 F8 04		        cmp     eax, 4                 ; check SSE2
+ 000000AF  72 0A		        jb      M100
+				        ; SSE2 supported
+				        ; Point to SSE2 version of strlen
+ 000000B1  C7 05 00000000 R	        mov     [strlenDispatch], offset strlenSSE2
+	   00000006 R
+ 000000BB  61			M100:   popad
+				        ; Continue in appropriate version of strlen
+ 000000BC  FF 25 00000000 R	        jmp     [strlenDispatch]
+
+				ELSE    ; Position-independent version
+				ENDIF
+				        
+				        
+ 00000000			.data
+				IFNDEF  POSITIONINDEPENDENT
+				; Pointer to appropriate version.
+				; This initially points to strlenCPUDispatch. strlenCPUDispatch will
+				; change this to the appropriate version of strlen, so that
+				; strlenCPUDispatch is only executed once:
+ 00000000 0000009C R		strlenDispatch DD strlenCPUDispatch
+				ELSE    ; position-independent
+				ENDIF
+
+ 000000C2			.code
+				        
+ 000000C2			_A_strlen ENDP
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+strlen32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000004 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 000000C2 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_A_strlen  . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 000000C2 Public
+  strlenSSE2 . . . . . . . . . .	L Near	 00000006 _TEXT	
+  A100 . . . . . . . . . . . . .	L Near	 0000002B _TEXT	
+  A200 . . . . . . . . . . . . .	L Near	 0000003F _TEXT	
+  strlen386  . . . . . . . . . .	L Near	 00000046 _TEXT	
+  L1 . . . . . . . . . . . . . .	L Near	 00000077 _TEXT	
+  L2 . . . . . . . . . . . . . .	L Near	 0000007A _TEXT	
+  L3 . . . . . . . . . . . . . .	L Near	 0000008E _TEXT	
+  strlenCPUDispatch  . . . . . .	L Near	 0000009C _TEXT	
+  M100 . . . . . . . . . . . . .	L Near	 000000BB _TEXT	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_strlen  . . . . . . . . . .	L Near	 00000000 _TEXT	Public
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+_InstructionSet  . . . . . . . .	L Near	 00000000 FLAT	External
+strlenDispatch . . . . . . . . .	DWord	 00000000 _DATA	
+
+	   0 Warnings
+	   0 Errors

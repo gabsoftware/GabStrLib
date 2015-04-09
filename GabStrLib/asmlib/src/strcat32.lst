@@ -1,0 +1,110 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+strcat32.asm						     Page 1 - 1
+
+
+				;*************************  strcat32.asm  ************************************
+				; Author:           Agner Fog
+				; Date created:     2008-07-19
+				; Last modified:    2008-07-19
+				; Description:
+				; Faster version of the standard strcat function:
+				; char * strcat(char * dest, const char * src);
+				; Copies zero-terminated string from src to end of dest.
+				;
+				; Overriding standard function strcat:
+				; The alias ?OVR_strcat is changed to _strcat in the object file if
+				; it is desired to override the standard library function strcat.
+				;
+				; Optimization:
+				; Uses optimized functions A_strlen and A_memcpy.
+				;
+				; Copyright (c) 2008 GNU General Public License www.gnu.org/licenses/gpl.html
+				;******************************************************************************
+				.686
+				.xmm
+				.model flat
+
+				public _A_strcat                       ; Function _A_strcat
+				public ?OVR_strcat                     ; ?OVR removed if standard function strcat overridden
+
+				; Imported from strlen32.asm
+				extern _A_strlen:near
+
+				; Imported from memcpy32.asm
+				extern _A_memcpy:near
+
+
+ 00000000			.code
+
+				; extern "C" char * A_strcat(char * dest, const char * src) {
+				;    memcpy(dest+strlen(dest), src, strlen(src)+1);
+				;    return dest
+				; }
+
+				; Function entry:
+ 00000000			_A_strcat PROC    NEAR
+ 00000000			?OVR_strcat LABEL NEAR
+
+ 00000000  8B 44 24 08		        mov     eax, [esp+8]           ; src
+ 00000004  50			        push    eax
+ 00000005  E8 00000000 E	        call    _A_strlen              ; length of src
+ 0000000A  40			        inc     eax                    ; include terminating zero in length
+ 0000000B  50			        push    eax                    ; strlen(src)+1        
+ 0000000C  8B 54 24 0C		        mov     edx, [esp+4+8]         ; dest
+ 00000010  52			        push    edx
+ 00000011  E8 00000000 E	        call    _A_strlen              ; length of dest
+ 00000016  5A			        pop     edx                    ; dest. Assume unchanged by _A_strlen
+ 00000017  03 D0		        add     edx, eax               ; dest+strlen(dest)
+ 00000019  8B 4C 24 10		        mov     ecx, [esp+8+8]         ; src
+				                                       ; strlen(src)+1 is on stack
+ 0000001D  51			        push    ecx                    ; src
+ 0000001E  52			        push    edx                    ; dest+strlen(dest)
+ 0000001F  E8 00000000 E	        call    _A_memcpy              ; copy
+ 00000024  83 C4 10		        add     esp, 16                ; clean up stack
+ 00000027  8B 44 24 04		        mov     eax, [esp+4]           ; return dest
+ 0000002B  C3			        ret
+
+ 0000002C			_A_strcat ENDP
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+strcat32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000000 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 0000002C Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_A_strcat  . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 0000002C Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+?OVR_strcat  . . . . . . . . . .	L Near	 00000000 _TEXT	Public
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+_A_memcpy  . . . . . . . . . . .	L Near	 00000000 FLAT	External
+_A_strlen  . . . . . . . . . . .	L Near	 00000000 FLAT	External
+
+	   0 Warnings
+	   0 Errors

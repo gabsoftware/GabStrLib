@@ -1,0 +1,92 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+rdtsc32.asm						     Page 1 - 1
+
+
+				;          RDTSC32.ASM                                          Agner Fog 2007
+
+				; © 2003-2007 GNU General Public License www.gnu.org/licenses/gpl.html
+
+				.686
+				.xmm
+				.model flat
+
+ 00000000			.code
+
+				; ********** ReadTSC function **********
+				; C++ prototype:
+				; extern "C" int ReadTSC (void);
+				; or:
+				; extern "C" __int64 ReadTSC (void);
+
+				; This function returns the value of the time stamp counter, which counts 
+				; clock cycles. To count how many clock cycles a piece of code takes, call
+				; Rdtsc before and after the code to measure and calculate the difference.
+
+				; The number of clock cycles taken by the ReadTSC function itself is approximately:
+				; Core 2:   730
+				; Pentium 4:  700
+				; Pentium II and Pentium III: 225
+				; AMD Athlon 64, Opteron: 126
+				; Does not work on 80386 and 80486.
+
+				; Note that clock counts may not be fully reproducible on Intel Core and
+				; Core 2 processors because the clock frequency can change. More reliable
+				; instruction timings are obtained with the performance monitor counter
+				; for "core clock cycles". This requires a kernel mode driver as the one
+				; included with www.agner.org/optimize/testp.zip.
+
+ 00000000			_ReadTSC PROC NEAR
+				PUBLIC _ReadTSC
+ 00000000  53			        push    ebx                    ; ebx is modified by cpuid
+ 00000001  2B C0		        sub     eax, eax               ; 0
+ 00000003  0F A2		        cpuid                          ; serialize
+ 00000005  0F 31		        rdtsc                          ; read time stamp counter
+ 00000007  50			        push    eax
+ 00000008  52			        push    edx
+ 00000009  2B C0		        sub     eax, eax
+ 0000000B  0F A2		        cpuid                ; serialize
+ 0000000D  5A			        pop     edx
+ 0000000E  58			        pop     eax
+ 0000000F  5B			        pop     ebx
+ 00000010  C3			        ret
+ 00000011			_ReadTSC ENDP
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+rdtsc32.asm						     Symbols 2 - 1
+
+
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000000 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 00000011 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_ReadTSC . . . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 00000011 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+
+	   0 Warnings
+	   0 Errors

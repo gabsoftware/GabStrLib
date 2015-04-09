@@ -1,0 +1,35 @@
+LIBRARY alibd32
+
+DESCRIPTION "Asmlib function library. (c) 2008 A. Fog"
+
+VERSION 2.00
+
+EXPORTS 
+        InstructionSet
+        ProcessorName
+        ReadTSC
+        Serialize
+        RoundF
+        RoundD
+
+        MersenneRandomInitD
+        MersenneRandomInitByArrayD
+        MersenneRandomD
+        MersenneIRandomD
+        MersenneIRandomXD
+        MersenneBRandomD
+        MotherRandomInitD
+        MotherRandomD
+        MotherIRandomD
+        MotherBRandomD
+
+        MersRandomInit
+        MersRandomInitByArray
+        MersRandom
+        MersIRandom
+        MersIRandomX
+        MersBRandom
+        MotRandomInit
+        MotRandom
+        MotIRandom
+        MotBRandom

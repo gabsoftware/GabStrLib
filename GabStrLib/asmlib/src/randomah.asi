@@ -1,0 +1,93 @@
+; ----------------------------- RANDOMAH.ASI ---------------------------
+;
+;  Assembly include file containing
+;  structure/class definitions for random number generators
+;
+;  © 2001, 2007 Agner Fog.
+;  GNU General Public License www.gnu.org/copyleft/gpl.html
+; ----------------------------------------------------------------------
+
+; Definitions for Mersenne Twister:
+
+TEMPERING EQU 1              ; set to 0 if no tempering (improves speed by 25%)
+
+IF 0
+; define constants for MT11213A:
+MERS_N    = 351
+MERS_M    = 175
+MERS_R    = 19
+MERS_A    = 0E4BD75F5H
+MERS_U    = 11
+MERS_S    = 7
+MERS_T    = 15
+MERS_L    = 17
+MERS_B    = 655E5280H
+MERS_C    = 0FFD58000H
+
+ELSE
+; or constants for MT19937:
+MERS_N    = 624
+MERS_M    = 397
+MERS_R    = 31
+MERS_A    = 09908B0DFH
+MERS_U    = 11
+MERS_S    = 7
+MERS_T    = 15
+MERS_L    = 18
+MERS_B    = 9D2C5680H
+MERS_C    = 0EFC60000H
+
+ENDIF
+
+LOWER_MASK = (1 SHL MERS_R) - 1             ; lower MERS_R bits
+UPPER_MASK = -1 SHL MERS_R                  ; upper 32-MERS_R bits
+
+; Define class CRandomMersenneA member data
+; Must be aligned by 16.
+
+CRandomMersenneA STRUC
+PreInt  DD      ?, ?, ?, ?             ; premade tempered integer numbers, ready to use
+PreFlt  DQ      ?, ?, ?, ?             ; premade floating point numbers, ready to use (subtract 1.0)
+        DQ      ?                      ; last PreFlt unaligned overrun if MERS_N mod 4 = 1
+TmpFlt  DQ      ?                      ; temporary storage of floating point random number
+PreInx  DD      ?                      ; index to next PreInt and PreFlt number
+Instset DD      ?                      ; Instruction set
+LastInterval DD ?                      ; Last interval length for IRandomX
+RLimit  DD      ?                      ; Rejection limit used by IRandomX
+TMB     DD      4 dup (?)              ; 4 copies of MERS_B constant
+TMC     DD      4 dup (?)              ; 4 copies of MERS_C constant
+one     DQ      2 dup (?)              ; 2 copies of 1.0 constant
+MTI     DD      ?                      ; index into MT buffer
+UMASK   DD      ?                      ; UPPER_MASK
+LMASK   DD      ?                      ; LOWER_MASK             ; constants
+MATA    DD      ?                      ; MERS_A
+wrap1   DD      4  dup (?)             ; MT buffer km wraparound
+MT      DD      MERS_N  dup (?)        ; MT history buffer (aligned by 16)
+wrap2   DD      4  dup (?)             ; MT buffer kk wraparound
+IF MERS_N AND 3
+        ; MERS_N not divisible by 4. align by 4
+        DD      (4 - (MERS_N AND 3)) dup (?)
+ENDIF        
+CRandomMersenneA ENDS
+
+
+; Definitions for Mother-of-all generator:
+
+; Define class CRandomMotherA member data
+; Must be aligned by 16. Preferably aligned by 64 to fit a cache line
+CRandomMotherA STRUC
+one     DQ      ?                      ; 1.0
+Instset DD      ?                      ; Instruction set
+M4      DD      ?                      ; x[n-4]
+M3      DD      ?                      ; x[n-3] (aligned)
+M2      DD      ?                      ; x[n-2]
+M1      DD      ?                      ; x[n-1]
+M0      DD      ?                      ; x[n]
+MC      DD      ?                      ; Carry (aligned)
+zero    DD      ?                      ; Zero-extension of carry
+RanP1   DQ      ?                      ; Double random number in interval [1,2)
+MF3     DD      ?                      ; 2111111111 (aligned)
+MF2     DD      ?                      ; 1492
+MF1     DD      ?                      ; 1776
+MF0     DD      ?                      ; 5115
+CRandomMotherA ENDS

@@ -1,0 +1,572 @@
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+mother32.asm						     Page 1 - 1
+
+
+				; ----------------------------- MOTHER32.ASM -----------------------------
+				; Mother-of-All random number generator by Agner Fog 1998 - 2008
+				; 32-bit mode version for 80x86 and compatible microprocessors
+				;
+				;  This is a multiply-with-carry type of random number generator
+				;  invented by George Marsaglia.  The algorithm is:             
+				;  S = 2111111111*X[n-4] + 1492*X[n-3] + 1776*X[n-2] + 5115*X[n-1] + C
+				;  X[n] = S modulo 2^32
+				;  C = floor(S / 2^32) 
+				;
+				; C++ prototypes:
+				;
+				; Thread-safe versions:
+				; extern "C" void         MotRandomInit(void * Pthis, int seed);      // Initialization
+				; extern "C" int          MotIRandom(void * Pthis, int min, int max); // Get integer random number in desired interval
+				; extern "C" double       MotRandom(void * Pthis);                    // Get floating point random number
+				; extern "C" unsigned int MotBRandom(void * Pthis);                   // Output random bits
+				;
+				; Single-threaded static link versions
+				; extern "C" void         MotherRandomInit(int seed);      // Initialization
+				; extern "C" int          MotherIRandom(int min, int max); // Get integer random number in desired interval
+				; extern "C" double       MotherRandom();                  // Get floating point random number
+				; extern "C" unsigned int MotherBRandom();                 // Output random bits
+				;
+				; Single-threaded dynamic link versions
+				; extern "C" void         __stdcall MotherRandomInitD(int seed);      // Initialization
+				; extern "C" int          __stdcall MotherIRandomD(int min, int max); // Get integer random number in desired interval
+				; extern "C" double       __stdcall MotherRandomD();                  // Get floating point random number
+				; extern "C" unsigned int __stdcall MotherBRandomD();                 // Output random bits
+				;
+				; © 1998 - 2008 Agner Fog. 
+				; See asmlib-instructions.pdf for license conditions
+				; ----------------------------------------------------------------------
+
+				.686
+				.xmm
+				.model flat
+
+				extern _InstructionSet: near
+
+				; structure definition and constants:
+				INCLUDE randomah.asi
+			      C ; ----------------------------- RANDOMAH.ASI ---------------------------
+			      C ;
+			      C ;  Assembly include file containing
+			      C ;  structure/class definitions for random number generators
+			      C ;
+			      C ;  © 2001, 2007 Agner Fog.
+			      C ;  GNU General Public License www.gnu.org/copyleft/gpl.html
+			      C ; ----------------------------------------------------------------------
+			      C 
+			      C ; Definitions for Mersenne Twister:
+			      C 
+ = 00000001		      C TEMPERING EQU 1              ; set to 0 if no tempering (improves speed by 25%)
+			      C 
+			      C IF 0
+			      C ELSE
+			      C ; or constants for MT19937:
+ = 00000270		      C MERS_N    = 624
+ = 0000018D		      C MERS_M    = 397
+ = 0000001F		      C MERS_R    = 31
+ = 9908B0DF		      C MERS_A    = 09908B0DFH
+ = 0000000B		      C MERS_U    = 11
+ = 00000007		      C MERS_S    = 7
+ = 0000000F		      C MERS_T    = 15
+ = 00000012		      C MERS_L    = 18
+ = 9D2C5680		      C MERS_B    = 9D2C5680H
+ = EFC60000		      C MERS_C    = 0EFC60000H
+			      C 
+			      C ENDIF
+			      C 
+ = 7FFFFFFF		      C LOWER_MASK = (1 SHL MERS_R) - 1             ; lower MERS_R bits
+ = 80000000		      C UPPER_MASK = -1 SHL MERS_R                  ; upper 32-MERS_R bits
+			      C 
+			      C ; Define class CRandomMersenneA member data
+			      C ; Must be aligned by 16.
+			      C 
+ 00000A70		      C CRandomMersenneA STRUC
+ 00000000  00000000	      C PreInt  DD      ?, ?, ?, ?             ; premade tempered integer numbers, ready to use
+	   00000000
+	   00000000
+	   00000000
+ 00000010  0000000000000000   C PreFlt  DQ      ?, ?, ?, ?             ; premade floating point numbers, ready to use (subtract 1.0)
+	   0000000000000000
+	   0000000000000000
+	   0000000000000000
+ 00000030  0000000000000000   C         DQ      ?                      ; last PreFlt unaligned overrun if MERS_N mod 4 = 1
+ 00000038  0000000000000000   C TmpFlt  DQ      ?                      ; temporary storage of floating point random number
+ 00000040  00000000	      C PreInx  DD      ?                      ; index to next PreInt and PreFlt number
+ 00000044  00000000	      C Instset DD      ?                      ; Instruction set
+ 00000048  00000000	      C LastInterval DD ?                      ; Last interval length for IRandomX
+ 0000004C  00000000	      C RLimit  DD      ?                      ; Rejection limit used by IRandomX
+ 00000050  00000004 [	      C TMB     DD      4 dup (?)              ; 4 copies of MERS_B constant
+	    00000000
+	   ]
+ 0DD0005C  00000004 [	      C TMC     DD      4 dup (?)              ; 4 copies of MERS_C constant
+	    00000000
+	   ]
+ 1BA00068  00000002 [	      C one     DQ      2 dup (?)              ; 2 copies of 1.0 constant
+	    0000000000000000
+	   ]
+ 37400080  00000000	      C MTI     DD      ?                      ; index into MT buffer
+ 37400084  00000000	      C UMASK   DD      ?                      ; UPPER_MASK
+ 37400088  00000000	      C LMASK   DD      ?                      ; LOWER_MASK             ; constants
+ 3740008C  00000000	      C MATA    DD      ?                      ; MERS_A
+ 37400090  00000004 [	      C wrap1   DD      4  dup (?)             ; MT buffer km wraparound
+	    00000000
+	   ]
+ 4510009C  00000270 [	      C MT      DD      MERS_N  dup (?)        ; MT history buffer (aligned by 16)
+	    00000000
+	   ]
+ 52E000A8  00000004 [	      C wrap2   DD      4  dup (?)             ; MT buffer kk wraparound
+	    00000000
+	   ]
+			      C IF MERS_N AND 3
+			      C ENDIF        
+			      C CRandomMersenneA ENDS
+			      C 
+			      C 
+			      C ; Definitions for Mother-of-all generator:
+			      C 
+			      C ; Define class CRandomMotherA member data
+			      C ; Must be aligned by 16. Preferably aligned by 64 to fit a cache line
+ 00000040		      C CRandomMotherA STRUC
+ 00000000  0000000000000000   C one     DQ      ?                      ; 1.0
+ 00000008  00000000	      C Instset DD      ?                      ; Instruction set
+ 0000000C  00000000	      C M4      DD      ?                      ; x[n-4]
+ 00000010  00000000	      C M3      DD      ?                      ; x[n-3] (aligned)
+ 00000014  00000000	      C M2      DD      ?                      ; x[n-2]
+ 00000018  00000000	      C M1      DD      ?                      ; x[n-1]
+ 0000001C  00000000	      C M0      DD      ?                      ; x[n]
+ 00000020  00000000	      C MC      DD      ?                      ; Carry (aligned)
+ 00000024  00000000	      C zero    DD      ?                      ; Zero-extension of carry
+ 00000028  0000000000000000   C RanP1   DQ      ?                      ; Double random number in interval [1,2)
+ 00000030  00000000	      C MF3     DD      ?                      ; 2111111111 (aligned)
+ 00000034  00000000	      C MF2     DD      ?                      ; 1492
+ 00000038  00000000	      C MF1     DD      ?                      ; 1776
+ 0000003C  00000000	      C MF0     DD      ?                      ; 5115
+			      C CRandomMotherA ENDS
+			      C 
+
+				IFNDEF POSITIONINDEPENDENT
+ 00000000			.DATA
+				; Data for single instance of random number generator
+ 00000000			MotherInstance CRandomMotherA <>
+	   0000000000000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+	   0000000000000000
+	   00000000
+	   00000000
+	   00000000
+	   00000000
+				ENDIF
+
+
+ 00000000			.CODE    ; code segment
+
+				; extern "C" unsigned int MotherBRandom(void * Pthis); // Output random bits
+
+ 00000000			_MotBRandom PROC NEAR
+ 00000000  8B 4C 24 04		        mov     ecx, [esp+4]                ; Pthis
+				        assume  ecx: ptr CRandomMotherA
+ 00000004			MotBRandom_reg label near                   ; Alternative entry for Pthis in ecx
+				;public  MotBRandom_reg
+				        
+				        ; CPU dispatch:
+ 00000004  83 79 08 04		        cmp     [ecx].Instset, 4
+ 00000008  72 55		        jb      MotBRandomGeneric
+
+				; SSE2 version        
+				        ; ecx = Pthis
+ 0000000A  66| 0F 6F 49		        movdqa  xmm1, xmmword ptr [ecx].M3  ; load M3,M2,M1,M0
+	   10
+ 0000000F  8B 41 1C		        mov     eax,  [ecx].M0              ; Retrieve previous random number
+ 00000012  66| 0F 6F D1		        movdqa  xmm2, xmm1                  ; copy
+ 00000016  66| 0F 6F 59		        movdqa  xmm3, xmmword ptr [ecx].MF3 ; factors
+	   30
+ 0000001B  66| 0F 73 D2		        psrlq   xmm2, 32                    ; move M2,M0 down
+	   20
+ 00000020  66| 0F D6 49		        movq    qword ptr [ecx].M4, xmm1    ; M4=M3, M3=M2
+	   0C
+ 00000025  0F 17 49 14		        movhps  qword ptr [ecx].M2, xmm1    ; M2=M1, M1=M0
+ 00000029  66| 0F F4 CB		        pmuludq xmm1, xmm3                  ; M3*MF3, M1*MF1
+ 0000002D  66| 0F 73 D3		        psrlq   xmm3, 32                    ; move MF2,MF0 down
+	   20
+ 00000032  66| 0F F4 D3		        pmuludq xmm2, xmm3                  ; M2*MF2, M0*MF0
+ 00000036  66| 0F D4 CA		        paddq   xmm1, xmm2                  ; P2+P3, P0+P1
+ 0000003A  0F 12 D1		        movhlps xmm2, xmm1                  ; Get high qword
+ 0000003D  66| 0F D4 CA		        paddq   xmm1, xmm2                  ; P0+P1+P2+P3
+ 00000041  66| 0F D4 49		        paddq   xmm1, qword ptr [ecx].MC    ; +carry
+	   20
+ 00000046  66| 0F D6 49		        movq    qword ptr [ecx].M0, xmm1    ; Store new M0 and carry
+	   1C
+				        ; convert to double precision float
+ 0000004B  66| 0F 73 F1		        psllq   xmm1, 32                    ; Discard carry bits
+	   20
+ 00000050  66| 0F 73 D1		        psrlq   xmm1, 12                    ; Get bits into mantissa position
+	   0C
+ 00000055  66| 0F EB 09		        por     xmm1, xmmword ptr [ecx].one ; Add exponent bits to get number in interval [1,2)
+ 00000059  66| 0F D6 49		        movq    [ecx].RanP1, xmm1           ; Store floating point number
+	   28
+ 0000005E  C3			        ret
+				        
+				        
+				; Generic version for old processors
+ 0000005F			MotBRandomGeneric label near                ; Generic version for old processors
+				        ; ecx = Pthis
+ 0000005F  56			        push    esi
+ 00000060  57			        push    edi
+				        ; recall previous random number
+ 00000061  FF 71 1C		        push    [ecx].m0
+				        ; prepare new random number
+ 00000064  8B 41 30		        mov     eax, [ecx].mf3
+ 00000067  F7 61 10		        mul     [ecx].m3                    ; x[n-4]
+ 0000006A  8B F0		        mov     esi,eax
+ 0000006C  8B 41 14		        mov     eax, [ecx].m2               ; x[n-3]
+ 0000006F  8B FA		        mov     edi,edx
+ 00000071  89 41 10		        mov     [ecx].m3,eax
+ 00000074  F7 61 34		        mul     [ecx].mf2
+ 00000077  03 F0		        add     esi,eax
+ 00000079  8B 41 18		        mov     eax, [ecx].m1               ; x[n-2]
+ 0000007C  13 FA		        adc     edi,edx
+ 0000007E  89 41 14		        mov     [ecx].m2,eax
+ 00000081  F7 61 38		        mul     [ecx].mf1
+ 00000084  03 F0		        add     esi,eax
+ 00000086  8B 41 1C		        mov     eax,[ecx].m0                ; x[n-1]
+ 00000089  13 FA		        adc     edi,edx
+ 0000008B  89 41 18		        mov     [ecx].m1,eax
+ 0000008E  F7 61 3C		        mul     [ecx].mf0
+ 00000091  03 C6		        add     eax,esi
+ 00000093  13 D7		        adc     edx,edi
+ 00000095  03 41 20		        add     eax,[ecx].mc
+ 00000098  83 D2 00		        adc     edx,0
+				        ; store next random number and carry
+ 0000009B  89 41 1C		        mov     [ecx].m0,eax
+ 0000009E  89 51 20		        mov     [ecx].mc,edx
+				        ; convert to float in case next call needs a float
+ 000000A1  8B D0		        mov     edx, eax
+ 000000A3  C1 E8 0C		        shr     eax, 12
+ 000000A6  0D 3FF00000		        or      eax, 3ff00000h
+ 000000AB  C1 E2 14		        shl     edx, 20
+ 000000AE  89 41 2C		        mov     dword ptr [ecx].RanP1+4, eax
+ 000000B1  89 51 28		        mov     dword ptr [ecx].RanP1, edx
+				        ; retrieve previous random number
+ 000000B4  58			        pop     eax
+ 000000B5  5F			        pop     edi
+ 000000B6  5E			        pop     esi
+ 000000B7  C3			        ret
+ 000000B8			_MotBRandom ENDP
+
+				        
+				; extern "C" double MotRandom(void * Pthis);  // Get floating point random number
+ 000000B8			_MotRandom PROC NEAR
+
+ 000000B8  8B 4C 24 04		        mov     ecx, [esp+4]                ; Pthis
+				        assume  ecx: ptr CRandomMotherA
+
+				        ; get previously prepared random number
+ 000000BC  DD 41 28		        fld     [ecx].RanP1
+ 000000BF  DC 21		        fsub    [ecx].one
+
+				        ; make new random number ready for next time
+ 000000C1  E8 FFFFFF3E		        call    MotBRandom_reg              ; random bits
+ 000000C6  C3			        ret
+ 000000C7			_MotRandom ENDP
+
+
+				; extern "C" int MotIRandom(void * Pthis, int min, int max); // Get integer random number in desired interval
+ 000000C7			_MotIRandom PROC NEAR                       ; make random integer in desired interval
+
+ 000000C7  8B 4C 24 04		        mov     ecx, [esp+4]                ; Pthis
+ 000000CB  E8 FFFFFF34		        call    MotBRandom_reg              ; make random number
+ 000000D0  8B 54 24 0C		        mov     edx, [esp+12]               ; max
+ 000000D4  8B 4C 24 08		        mov     ecx, [esp+8]                ; min
+ 000000D8  2B D1		        sub     edx, ecx
+ 000000DA  78 07		        js      short rerror                ; max < min
+ 000000DC  42			        inc     edx                         ; max - min + 1
+ 000000DD  F7 E2		        mul     edx                         ; multiply random number by interval and truncate
+ 000000DF  8D 04 11		        lea     eax, [edx+ecx]              ; add min
+ 000000E2  C3			        ret                                 ; ret 8 if not _cdecl calling
+
+ 000000E3  B8 80000000		rerror: mov     eax, 80000000h              ; error exit   
+ 000000E8  C3			        ret                                 ; ret 8 if not _cdecl calling
+ 000000E9			_MotIRandom ENDP
+
+
+				; extern "C" void MotRandomInit(void * Pthis, int seed);  // Initialization
+ 000000E9			_MotRandomInit PROC NEAR
+
+				        ; clear my buffer
+ 000000E9  57			        push    edi
+ 000000EA  8B 7C 24 08		        mov     edi, [esp+8]                ; Pthis
+ 000000EE  B9 00000010		        mov     ecx, (type CRandomMotherA) / 4
+ 000000F3  33 C0		        xor     eax, eax
+ 000000F5  FC			        cld
+ 000000F6  F3/ AB		        rep     stosd
+				        
+				        ; insert constants
+ 000000F8  8B 4C 24 08		        mov     ecx, [esp+8]                ; Pthis
+				        assume  ecx: ptr CRandomMotherA
+ 000000FC  C7 41 04		        mov     dword ptr [ecx].one + 4, 3FF00000H  ; high dword of 1.0       
+	   3FF00000
+ 00000103  C7 41 3C		        mov     [ecx].MF0, 5115             ; factors
+	   000013FB
+ 0000010A  C7 41 38		        mov     [ecx].MF1, 1776
+	   000006F0
+ 00000111  C7 41 34		        mov     [ecx].MF2, 1492
+	   000005D4
+ 00000118  C7 41 30		        mov     [ecx].MF3, 2111111111
+	   7DD4FFC7
+				        
+				        ; get instruction set
+ 0000011F  51			        push    ecx
+ 00000120  E8 00000000 E	        call    _InstructionSet
+ 00000125  59			        pop     ecx
+ 00000126  89 41 08		        mov     [ecx].Instset, eax
+				        
+				        ; initialize from seed
+ 00000129  8B 44 24 0C		        mov     eax, [esp+12]               ; seed        
+				        ; make random numbers and put them into buffer
+ 0000012D  69 C0 01C8E815	        imul    eax, 29943829
+ 00000133  48			        dec     eax
+ 00000134  89 41 1C		        mov     [ecx].M0, eax
+ 00000137  69 C0 01C8E815	        imul    eax, 29943829
+ 0000013D  48			        dec     eax
+ 0000013E  89 41 18		        mov     [ecx].M1, eax
+ 00000141  69 C0 01C8E815	        imul    eax, 29943829
+ 00000147  48			        dec     eax
+ 00000148  89 41 14		        mov     [ecx].M2, eax
+ 0000014B  69 C0 01C8E815	        imul    eax, 29943829
+ 00000151  48			        dec     eax
+ 00000152  89 41 10		        mov     [ecx].M3, eax
+ 00000155  69 C0 01C8E815	        imul    eax, 29943829
+ 0000015B  48			        dec     eax
+ 0000015C  89 41 20		        mov     [ecx].MC, eax
+
+				        ; randomize some more
+ 0000015F  BF 00000014		        mov     edi, 20                     ; loop counter
+ 00000164  E8 FFFFFE9B		r90:    call    MotBRandom_reg
+ 00000169  4F			        dec     edi
+ 0000016A  75 F8		        jnz     r90
+ 0000016C  5F			        pop     edi
+ 0000016D  C3			        ret     0                           ; ret 4 if not _cdecl calling
+ 0000016E			_MotRandomInit ENDP
+
+
+				IFNDEF POSITIONINDEPENDENT
+				; ------------------------------------------------------------------
+				; Single-threaded static link versions
+				; ------------------------------------------------------------------
+
+				; extern "C" void MotherRandomInit(int seed); // Initialization
+ 0000016E			_MotherRandomInit PROC NEAR
+ 0000016E  FF 74 24 04		        push    [esp+4]                ; seed
+ 00000172  68 00000000 R	        push    offset MotherInstance
+ 00000177  E8 FFFFFF6D		        call    _MotRandomInit
+ 0000017C  59			        pop     ecx
+ 0000017D  59			        pop     ecx
+ 0000017E  C3			        ret
+ 0000017F			_MotherRandomInit ENDP
+
+
+				; extern "C" double MotherRandom(); // Get floating point random number
+ 0000017F			_MotherRandom PROC NEAR
+ 0000017F  B9 00000000 R	        mov     ecx, offset MotherInstance
+				        assume  ecx: ptr CRandomMotherA
+ 00000184  DD 41 28		        fld     [ecx].RanP1
+ 00000187  DC 21		        fsub    [ecx].one
+ 00000189  E8 FFFFFE76		        call    MotBRandom_reg         ; random bits
+ 0000018E  C3			        ret
+ 0000018F			_MotherRandom ENDP
+
+
+				; extern "C" int MotherIRandom(int min, int max); // Get integer random number in desired interval
+ 0000018F			_MotherIRandom PROC   NEAR             ; make random integer in desired interval
+ 0000018F  B9 00000000 R	        mov     ecx, offset MotherInstance
+ 00000194  E8 FFFFFE6B		        call    MotBRandom_reg         ; make random number
+ 00000199  8B 54 24 08		        mov     edx, [esp+8]           ; max
+ 0000019D  8B 4C 24 04		        mov     ecx, [esp+4]           ; min
+ 000001A1  2B D1		        sub     edx, ecx
+ 000001A3  78 07		        js      RR100                  ; max < min
+ 000001A5  42			        inc     edx                    ; max - min + 1
+ 000001A6  F7 E2		        mul     edx                    ; multiply random number by interval and truncate
+ 000001A8  8D 04 11		        lea     eax, [edx+ecx]         ; add min
+ 000001AB  C3			        ret                            ; ret 8 if not _cdecl calling
+				        
+ 000001AC  B8 80000000		RR100:  mov     eax, 80000000H         ; error exit   
+ 000001B1  C3			        ret                            ; ret 8 if not _cdecl calling
+ 000001B2			_MotherIRandom ENDP
+
+
+				; extern "C" unsigned int MotherBRandom(); // Output random bits
+ 000001B2			_MotherBRandom PROC NEAR
+ 000001B2  B9 00000000 R	        mov     ecx, offset MotherInstance
+ 000001B7  E9 FFFFFE48		        jmp     MotBRandom_reg
+ 000001BC			_MotherBRandom ENDP
+				       
+
+				; ------------------------------------------------------------------
+				; Single-threaded dynamic link versions
+				; ------------------------------------------------------------------
+
+				; extern "C" void __stdcall MotherRandomInitD(int seed); // Initialization
+ 000001BC			_MotherRandomInitD@4 PROC NEAR
+ 000001BC  FF 74 24 04		        push    [esp+4]                ; seed
+ 000001C0  68 00000000 R	        push    offset MotherInstance
+ 000001C5  E8 FFFFFF1F		        call    _MotRandomInit
+ 000001CA  59			        pop     ecx
+ 000001CB  59			        pop     ecx
+ 000001CC  C2 0004		        ret     4
+ 000001CF			_MotherRandomInitD@4 ENDP
+
+
+				; extern "C" double __stdcall MotherRandomD(); // Get floating point random number
+ 000001CF			_MotherRandomD@0 PROC NEAR
+ 000001CF  B9 00000000 R	        mov     ecx, offset MotherInstance
+				        assume  ecx: ptr CRandomMotherA
+ 000001D4  DD 41 28		        fld     [ecx].RanP1
+ 000001D7  DC 21		        fsub    [ecx].one
+ 000001D9  E8 FFFFFE26		        call    MotBRandom_reg         ; random bits
+ 000001DE  C3			        ret
+ 000001DF			_MotherRandomD@0 ENDP
+
+
+				; extern "C" int __stdcall MotherIRandomD(int min, int max); // Get integer random number in desired interval
+ 000001DF			_MotherIRandomD@8 PROC NEAR            ; make random integer in desired interval
+ 000001DF  B9 00000000 R	        mov     ecx, offset MotherInstance
+ 000001E4  E8 FFFFFE1B		        call    MotBRandom_reg         ; make random number
+ 000001E9  8B 54 24 08		        mov     edx, [esp+8]           ; max
+ 000001ED  8B 4C 24 04		        mov     ecx, [esp+4]           ; min
+ 000001F1  2B D1		        sub     edx, ecx
+ 000001F3  78 09		        js      RR200                  ; max < min
+ 000001F5  42			        inc     edx                    ; max - min + 1
+ 000001F6  F7 E2		        mul     edx                    ; multiply random number by interval and truncate
+ 000001F8  8D 04 11		        lea     eax, [edx+ecx]         ; add min
+ 000001FB  C2 0008		        ret     8
+
+ 000001FE  B8 80000000		RR200:  mov     eax, 80000000h         ; error exit   
+ 00000203  C2 0008		        ret     8
+ 00000206			_MotherIRandomD@8 ENDP
+
+
+				; extern "C" unsigned int __stdcall MotherBRandomD(); // Output random bits
+ 00000206			_MotherBRandomD@0 PROC NEAR
+ 00000206  B9 00000000 R	        mov     ecx, offset MotherInstance
+ 0000020B  E9 FFFFFDF4		        jmp     MotBRandom_reg
+ 00000210			_MotherBRandomD@0 ENDP       
+
+				ENDIF ; not POSITIONINDEPENDENT
+
+				END
+Microsoft (R) Macro Assembler Version 9.00.21022.08	    08/06/09 23:17:55
+mother32.asm						     Symbols 2 - 1
+
+
+
+
+Structures and Unions:
+
+                N a m e                  Size
+                                         Offset      Type
+
+CRandomMersenneA . . . . . . . .	 00000A70
+  PreInt . . . . . . . . . . . .	 00000000	 DWord
+  PreFlt . . . . . . . . . . . .	 00000010	 QWord
+  TmpFlt . . . . . . . . . . . .	 00000038	 QWord
+  PreInx . . . . . . . . . . . .	 00000040	 DWord
+  Instset  . . . . . . . . . . .	 00000044	 DWord
+  LastInterval . . . . . . . . .	 00000048	 DWord
+  RLimit . . . . . . . . . . . .	 0000004C	 DWord
+  TMB  . . . . . . . . . . . . .	 00000050	 DWord
+  TMC  . . . . . . . . . . . . .	 00000060	 DWord
+  one  . . . . . . . . . . . . .	 00000070	 QWord
+  MTI  . . . . . . . . . . . . .	 00000080	 DWord
+  UMASK  . . . . . . . . . . . .	 00000084	 DWord
+  LMASK  . . . . . . . . . . . .	 00000088	 DWord
+  MATA . . . . . . . . . . . . .	 0000008C	 DWord
+  wrap1  . . . . . . . . . . . .	 00000090	 DWord
+  MT . . . . . . . . . . . . . .	 000000A0	 DWord
+  wrap2  . . . . . . . . . . . .	 00000A60	 DWord
+CRandomMotherA . . . . . . . . .	 00000040
+  one  . . . . . . . . . . . . .	 00000000	 QWord
+  Instset  . . . . . . . . . . .	 00000008	 DWord
+  M4 . . . . . . . . . . . . . .	 0000000C	 DWord
+  M3 . . . . . . . . . . . . . .	 00000010	 DWord
+  M2 . . . . . . . . . . . . . .	 00000014	 DWord
+  M1 . . . . . . . . . . . . . .	 00000018	 DWord
+  M0 . . . . . . . . . . . . . .	 0000001C	 DWord
+  MC . . . . . . . . . . . . . .	 00000020	 DWord
+  zero . . . . . . . . . . . . .	 00000024	 DWord
+  RanP1  . . . . . . . . . . . .	 00000028	 QWord
+  MF3  . . . . . . . . . . . . .	 00000030	 DWord
+  MF2  . . . . . . . . . . . . .	 00000034	 DWord
+  MF1  . . . . . . . . . . . . .	 00000038	 DWord
+  MF0  . . . . . . . . . . . . .	 0000003C	 DWord
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	32 Bit	 00000040 Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 00000210 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+_MotBRandom  . . . . . . . . . .	P Near	 00000000 _TEXT	Length= 000000B8 Public
+_MotIRandom  . . . . . . . . . .	P Near	 000000C7 _TEXT	Length= 00000022 Public
+  rerror . . . . . . . . . . . .	L Near	 000000E3 _TEXT	
+_MotRandomInit . . . . . . . . .	P Near	 000000E9 _TEXT	Length= 00000085 Public
+  r90  . . . . . . . . . . . . .	L Near	 00000164 _TEXT	
+_MotRandom . . . . . . . . . . .	P Near	 000000B8 _TEXT	Length= 0000000F Public
+_MotherBRandomD@0  . . . . . . .	P Near	 00000206 _TEXT	Length= 0000000A Public
+_MotherBRandom . . . . . . . . .	P Near	 000001B2 _TEXT	Length= 0000000A Public
+_MotherIRandomD@8  . . . . . . .	P Near	 000001DF _TEXT	Length= 00000027 Public
+  RR200  . . . . . . . . . . . .	L Near	 000001FE _TEXT	
+_MotherIRandom . . . . . . . . .	P Near	 0000018F _TEXT	Length= 00000023 Public
+  RR100  . . . . . . . . . . . .	L Near	 000001AC _TEXT	
+_MotherRandomD@0 . . . . . . . .	P Near	 000001CF _TEXT	Length= 00000010 Public
+_MotherRandomInitD@4 . . . . . .	P Near	 000001BC _TEXT	Length= 00000013 Public
+_MotherRandomInit  . . . . . . .	P Near	 0000016E _TEXT	Length= 00000011 Public
+_MotherRandom  . . . . . . . . .	P Near	 0000017F _TEXT	Length= 00000010 Public
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000000h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+LOWER_MASK . . . . . . . . . . .	Number	 7FFFFFFFh   
+MERS_A . . . . . . . . . . . . .	Number	 9908B0DFh   
+MERS_B . . . . . . . . . . . . .	Number	 9D2C5680h   
+MERS_C . . . . . . . . . . . . .	Number	 EFC60000h   
+MERS_L . . . . . . . . . . . . .	Number	 00000012h   
+MERS_M . . . . . . . . . . . . .	Number	 0000018Dh   
+MERS_N . . . . . . . . . . . . .	Number	 00000270h   
+MERS_R . . . . . . . . . . . . .	Number	 0000001Fh   
+MERS_S . . . . . . . . . . . . .	Number	 00000007h   
+MERS_T . . . . . . . . . . . . .	Number	 0000000Fh   
+MERS_U . . . . . . . . . . . . .	Number	 0000000Bh   
+MotBRandomGeneric  . . . . . . .	L Near	 0000005F _TEXT	
+MotBRandom_reg . . . . . . . . .	L Near	 00000004 _TEXT	
+MotherInstance . . . . . . . . .	CRandomMotherA  00000000 _DATA	
+TEMPERING  . . . . . . . . . . .	Number	 00000001h   
+UPPER_MASK . . . . . . . . . . .	Number	 -80000000h   
+_InstructionSet  . . . . . . . .	L Near	 00000000 FLAT	External
+
+	   0 Warnings
+	   0 Errors
